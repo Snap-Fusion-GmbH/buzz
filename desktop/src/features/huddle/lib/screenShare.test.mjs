@@ -182,3 +182,17 @@ test("packets from a live sharer surface another sharer's expiry to React", () =
   );
   assert.equal(receiver.expire(now + 5001), false);
 });
+
+test("camera and screen tracks from the same signer have independent lifetimes", () => {
+  const screens = new ScreenShareReceiver(channel);
+  const cameras = new ScreenShareReceiver(channel, 24812);
+  const screen = event(batch(1));
+  const camera = { ...screen, kind: 24812 };
+  assert.equal(screens.receive(screen, now), true);
+  assert.equal(cameras.receive(camera, now), true);
+  assert.equal(screens.receive(camera, now), false);
+  assert.equal(cameras.receive(screen, now), false);
+  cameras.receive(event({ type: "stopped", share }, { kind: 24812 }), now);
+  assert.equal(cameras.snapshot().length, 0);
+  assert.equal(screens.snapshot().length, 1);
+});

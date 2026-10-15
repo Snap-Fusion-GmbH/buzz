@@ -9,9 +9,13 @@ import type { ScreenVideoStream, VideoBatch } from "../lib/screenShare";
 export function ScreenVideoPlayer({
   stream,
   label,
+  camera = false,
+  mirror = false,
 }: {
   stream: ScreenVideoStream;
   label: string;
+  camera?: boolean;
+  mirror?: boolean;
 }) {
   const ref = React.useRef<HTMLVideoElement>(null);
   const [error, setError] = React.useState<string | null>(null);
@@ -167,10 +171,11 @@ export function ScreenVideoPlayer({
         ref={ref}
         aria-label={label}
         className="h-full w-full object-contain"
+        style={mirror ? { transform: "scaleX(-1)" } : undefined}
         autoPlay
         muted
         playsInline
-        data-testid="huddle-shared-screen"
+        data-testid={camera ? "huddle-camera-video" : "huddle-shared-screen"}
       />
       {error ? (
         <div className="absolute inset-x-0 bottom-0 flex items-center gap-2 bg-black/80 px-3 py-2">

@@ -34,8 +34,12 @@ fn connection(keys: &Keys) -> Arc<ConnectionState> {
 }
 
 fn stop_event(keys: &Keys, channels: &[String]) -> Event {
+    stop_video_event(keys, channels, buzz_core::kind::KIND_HUDDLE_SCREEN)
+}
+
+fn stop_video_event(keys: &Keys, channels: &[String], kind: u32) -> Event {
     EventBuilder::new(
-        Kind::Custom(buzz_core::kind::KIND_HUDDLE_SCREEN as u16),
+        Kind::Custom(kind as u16),
         serde_json::json!({
             "type": "stopped",
             "share": {
@@ -53,6 +57,20 @@ fn stop_event(keys: &Keys, channels: &[String]) -> Event {
     )
     .sign_with_keys(keys)
     .unwrap()
+}
+
+#[tokio::test]
+async fn camera_handler_rejects_missing_or_ambiguous_channel_scope() {
+    let state = crate::state::tests::test_state().await;
+    state.db.pool().close().await;
+    let keys = Keys::generate();
+    let channel = Uuid::new_v4().to_string();
+    for channels in [vec![], vec![channel.clone(), channel.clone()]] {
+        let event = stop_video_event(&keys, &channels, buzz_core::kind::KIND_HUDDLE_CAMERA);
+        let result = deliver(event, &keys, state.clone()).await;
+        assert!(matches!(result, Err(IngestError::Rejected(ref reason))
+            if reason == "invalid: camera events require exactly one h tag"));
+    }
 }
 
 async fn deliver(event: Event, keys: &Keys, state: Arc<AppState>) -> Result<(), IngestError> {

@@ -1,5 +1,8 @@
 import type { RelayEvent } from "@/shared/api/types";
-import { KIND_HUDDLE_SCREEN } from "@/shared/constants/kinds";
+import {
+  KIND_HUDDLE_CAMERA,
+  KIND_HUDDLE_SCREEN,
+} from "@/shared/constants/kinds";
 
 export type ScreenShare = {
   session_id: string;
@@ -27,10 +30,12 @@ export function parseScreenMessage(
   event: RelayEvent,
   channelId: string,
   now = Date.now(),
+  kind = KIND_HUDDLE_SCREEN,
 ): ScreenMessage | null {
   const channels = event.tags.filter((tag) => tag[0] === "h");
   if (
-    event.kind !== KIND_HUDDLE_SCREEN ||
+    (kind !== KIND_HUDDLE_SCREEN && kind !== KIND_HUDDLE_CAMERA) ||
+    event.kind !== kind ||
     channels.length !== 1 ||
     channels[0].length !== 2 ||
     channels[0][1] !== channelId ||
@@ -63,10 +68,10 @@ export function parseScreenMessage(
       !/^avc1\.(42|4d|64)[0-9a-f]{4}$/i.test(message.codec) ||
       !Number.isInteger(message.width) ||
       message.width < 2 ||
-      message.width > 1920 ||
+      message.width > (kind === KIND_HUDDLE_CAMERA ? 1280 : 1920) ||
       !Number.isInteger(message.height) ||
       message.height < 2 ||
-      message.height > 1080 ||
+      message.height > (kind === KIND_HUDDLE_CAMERA ? 720 : 1080) ||
       !Array.isArray(message.frames) ||
       message.frames.length === 0 ||
       message.frames.length > 8
@@ -205,13 +210,15 @@ export class ScreenShareReceiver {
   private senders = new Map<string, SenderState>();
   private screens = new Map<string, ScreenVideoStream>();
   private readonly channelId: string;
-  constructor(channelId: string) {
+  private readonly kind: number;
+  constructor(channelId: string, kind = KIND_HUDDLE_SCREEN) {
     this.channelId = channelId;
+    this.kind = kind;
   }
 
   /** Apply a packet and return whether the visible stream list changed. */
   receive(event: RelayEvent, now = Date.now()): boolean {
-    const message = parseScreenMessage(event, this.channelId, now);
+    const message = parseScreenMessage(event, this.channelId, now, this.kind);
     if (!message) return false;
     let changed = this.expire(now);
     const previous = this.senders.get(event.pubkey);

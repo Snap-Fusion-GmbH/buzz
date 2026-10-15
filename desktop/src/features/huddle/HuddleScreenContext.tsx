@@ -202,8 +202,6 @@ export function HuddleScreenProvider({
           );
         }
       },
-      schedule: (callback, delay) => window.setTimeout(callback, delay),
-      unschedule: (timer) => window.clearTimeout(timer as number),
     });
     return () => {
       current = false;

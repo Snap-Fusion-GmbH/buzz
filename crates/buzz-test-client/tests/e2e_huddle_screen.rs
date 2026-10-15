@@ -9,7 +9,8 @@ use anyhow::{bail, Context, Result};
 use buzz_core::{
     huddle_screen::{ScreenMessage, ScreenShare},
     kind::{
-        KIND_HUDDLE_SCREEN, KIND_NIP29_CREATE_GROUP, KIND_NIP29_EDIT_METADATA, KIND_NIP29_PUT_USER,
+        KIND_HUDDLE_CAMERA, KIND_HUDDLE_SCREEN, KIND_NIP29_CREATE_GROUP, KIND_NIP29_EDIT_METADATA,
+        KIND_NIP29_PUT_USER,
     },
 };
 use buzz_test_client::{BuzzTestClient, RelayMessage};
@@ -32,8 +33,12 @@ struct Room {
 }
 
 fn filter(channel: &str) -> Filter {
+    video_filter(channel, KIND_HUDDLE_SCREEN)
+}
+
+fn video_filter(channel: &str, kind: u32) -> Filter {
     Filter::new()
-        .kind(Kind::Custom(KIND_HUDDLE_SCREEN as u16))
+        .kind(Kind::Custom(kind as u16))
         .custom_tags(SingleLetterTag::lowercase(Alphabet::H), [channel])
         .limit(0)
 }
@@ -64,15 +69,124 @@ fn video_packets() -> Result<Vec<ScreenMessage>> {
 }
 
 fn screen_event(keys: &Keys, message: &ScreenMessage, channels: &[&str]) -> Result<Event> {
+    video_event(keys, message, channels, KIND_HUDDLE_SCREEN)
+}
+
+fn video_event(
+    keys: &Keys,
+    message: &ScreenMessage,
+    channels: &[&str],
+    kind: u32,
+) -> Result<Event> {
     sign(
         keys,
-        KIND_HUDDLE_SCREEN,
+        kind,
         serde_json::to_string(message)?,
         channels
             .iter()
             .map(|channel| Tag::parse(["h", *channel]))
             .collect::<std::result::Result<_, _>>()?,
     )
+}
+
+#[tokio::test]
+#[ignore = "Requires Postgres, Redis, and a local relay built from this branch"]
+async fn camera_and_screen_share_independent_private_live_tracks_without_persistence() -> Result<()>
+{
+    let mut room = room().await?;
+    let mut viewer = BuzzTestClient::connect(&room.url, &room.viewer).await?;
+    viewer
+        .subscribe(
+            "cameras",
+            vec![video_filter(&room.channel, KIND_HUDDLE_CAMERA)],
+        )
+        .await?;
+    assert!(viewer
+        .collect_until_eose("cameras", DEADLINE)
+        .await?
+        .is_empty());
+    viewer
+        .subscribe("screens", vec![filter(&room.channel)])
+        .await?;
+    assert!(viewer
+        .collect_until_eose("screens", DEADLINE)
+        .await?
+        .is_empty());
+    let packets = video_packets()?;
+    let camera = video_event(
+        &room.owner,
+        &packets[0],
+        &[&room.channel],
+        KIND_HUDDLE_CAMERA,
+    )?;
+    let screen = screen_event(&room.owner, &packets[0], &[&room.channel])?;
+    for (event, subscription) in [(camera, "cameras"), (screen, "screens")] {
+        let id = event.id;
+        accepted(&mut room.publisher, event).await?;
+        assert!(matches!(viewer.recv_event(DEADLINE).await?,
+            RelayMessage::Event { subscription_id, event }
+            if subscription_id == subscription && event.id == id));
+    }
+    let ScreenMessage::Video { share, .. } = &packets[0] else {
+        bail!("video fixture")
+    };
+    accepted(
+        &mut room.publisher,
+        video_event(
+            &room.owner,
+            &ScreenMessage::Stopped {
+                share: share.clone(),
+            },
+            &[&room.channel],
+            KIND_HUDDLE_CAMERA,
+        )?,
+    )
+    .await?;
+    assert!(matches!(viewer.recv_event(DEADLINE).await?,
+        RelayMessage::Event { subscription_id, .. } if subscription_id == "cameras"));
+    accepted(
+        &mut room.publisher,
+        screen_event(&room.owner, &packets[1], &[&room.channel])?,
+    )
+    .await?;
+    assert!(matches!(viewer.recv_event(DEADLINE).await?,
+        RelayMessage::Event { subscription_id, .. } if subscription_id == "screens"));
+    let mut outsider = BuzzTestClient::connect(&room.url, &room.outsider).await?;
+    assert!(
+        !outsider
+            .send_event(video_event(
+                &room.outsider,
+                &packets[0],
+                &[&room.channel],
+                KIND_HUDDLE_CAMERA
+            )?)
+            .await?
+            .accepted
+    );
+    let mut other_tenant = BuzzTestClient::connect(&room.other_url, &room.owner).await?;
+    assert!(
+        !other_tenant
+            .send_event(video_event(
+                &room.owner,
+                &packets[0],
+                &[&room.channel],
+                KIND_HUDDLE_CAMERA
+            )?)
+            .await?
+            .accepted
+    );
+    let stored: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM events WHERE community_id = $1 AND channel_id = $2 AND kind = ANY($3)",
+    ).bind(room.community).bind(Uuid::parse_str(&room.channel)?)
+        .bind(vec![KIND_HUDDLE_CAMERA as i32, KIND_HUDDLE_SCREEN as i32])
+        .fetch_one(&room.pool).await?;
+    assert_eq!(stored, 0, "neither video track may persist pixels");
+    outsider.disconnect().await?;
+    other_tenant.disconnect().await?;
+    viewer.disconnect().await?;
+    room.publisher.disconnect().await?;
+    room.pool.close().await;
+    Ok(())
 }
 
 async fn accepted(client: &mut BuzzTestClient, event: Event) -> Result<()> {

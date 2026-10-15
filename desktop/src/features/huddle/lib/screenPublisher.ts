@@ -1,12 +1,13 @@
 import type { RelayEvent } from "@/shared/api/types";
 import type { VideoBatch } from "./screenShare";
+import { HuddleMediaClock } from "./huddleMediaClock";
 
 type PublisherDependencies = {
   capture: () => Promise<RelayEvent | null>;
   publish: (event: RelayEvent, isCurrent: () => boolean) => Promise<unknown>;
   fail: (error: unknown) => Promise<void>;
-  schedule: (callback: () => void, delay: number) => unknown;
-  unschedule: (timer: unknown) => void;
+  schedule?: (callback: () => void, delay: number) => unknown;
+  unschedule?: (timer: unknown) => void;
   now?: () => number;
 };
 
@@ -27,8 +28,34 @@ export function startScreenPublisher(deps: PublisherDependencies): () => void {
   let refusals = 0;
   let cooldownTotal = 0;
   let captureAfter = 0;
+  let clock: HuddleMediaClock | undefined;
   const now = deps.now ?? Date.now;
   const isCurrent = () => !disposed;
+  const failed = async (error: unknown) => {
+    if (disposed) return;
+    disposed = true;
+    clock?.dispose();
+    await deps.fail(error);
+  };
+  let schedule = deps.schedule;
+  let unschedule = deps.unschedule;
+  try {
+    if (!schedule && !unschedule) {
+      clock = new HuddleMediaClock((error) => {
+        void failed(error);
+      });
+      const mediaClock = clock;
+      schedule = (callback, delay) => mediaClock.schedule(callback, delay);
+      unschedule = (timer) => mediaClock.unschedule(timer);
+    }
+    if (!schedule || !unschedule)
+      throw new Error("Huddle publication requires a cancellable clock");
+  } catch (error) {
+    void failed(error);
+    return () => {};
+  }
+  const scheduleNext = schedule;
+  const cancelNext = unschedule;
   async function tick() {
     if (disposed) return;
     try {
@@ -50,7 +77,7 @@ export function startScreenPublisher(deps: PublisherDependencies): () => void {
           )
             throw new Error("Screen capture returned invalid video");
           if (batch.share.started_at + timestamp / 1000 < captureAfter) {
-            timer = deps.schedule(() => void tick(), 0);
+            timer = scheduleNext(() => void tick(), 0);
             return;
           }
         }
@@ -68,23 +95,25 @@ export function startScreenPublisher(deps: PublisherDependencies): () => void {
           refusals++;
           cooldownTotal += delay;
           captureAfter = now() + delay;
-          timer = deps.schedule(() => void tick(), delay);
+          timer = scheduleNext(() => void tick(), delay);
           return;
         }
         refusals = 0;
         cooldownTotal = 0;
         captureAfter = 0;
       }
-      if (!disposed) timer = deps.schedule(() => void tick(), 0);
+      if (!disposed) timer = scheduleNext(() => void tick(), 0);
     } catch (error) {
-      if (disposed) return;
-      disposed = true;
-      await deps.fail(error);
+      await failed(error);
     }
   }
   void tick();
   return () => {
     disposed = true;
-    if (timer !== undefined) deps.unschedule(timer);
+    try {
+      if (timer !== undefined) cancelNext(timer);
+    } finally {
+      clock?.dispose();
+    }
   };
 }

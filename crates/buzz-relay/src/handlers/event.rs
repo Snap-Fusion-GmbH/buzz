@@ -924,8 +924,15 @@ async fn handle_ephemeral_event(
     let event_id = event.id.to_hex();
     let verify_result = tokio::task::spawn_blocking(move || {
         verify_event(&event_clone).map_err(|e| format!("invalid: {e}"))?;
-        if event_kind_u32(&event_clone) == buzz_core::kind::KIND_HUDDLE_SCREEN {
+        let kind = event_kind_u32(&event_clone);
+        if kind == buzz_core::kind::KIND_HUDDLE_SCREEN {
             buzz_core::huddle_screen::validate_screen_event(
+                &event_clone,
+                nostr::Timestamp::now().as_secs(),
+            )
+            .map(Some)
+        } else if kind == buzz_core::kind::KIND_HUDDLE_CAMERA {
+            buzz_core::huddle_screen::validate_camera_event(
                 &event_clone,
                 nostr::Timestamp::now().as_secs(),
             )
@@ -1183,7 +1190,10 @@ async fn publish_channel_ephemeral(
             .local_event_ids
             .invalidate(&(tenant.community(), event.id.to_bytes()));
         warn!(event_id = %event.id.to_hex(), "Ephemeral publish failed: {e}");
-        if event_kind_u32(&event) == buzz_core::kind::KIND_HUDDLE_SCREEN {
+        if matches!(
+            event_kind_u32(&event),
+            buzz_core::kind::KIND_HUDDLE_SCREEN | buzz_core::kind::KIND_HUDDLE_CAMERA
+        ) {
             return Err(IngestError::Internal(
                 "error: screen delivery unavailable".into(),
             ));

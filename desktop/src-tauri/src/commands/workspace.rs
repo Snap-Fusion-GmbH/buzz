@@ -269,6 +269,7 @@ pub async fn apply_workspace(
         };
         if !same_relay || !same_signer {
             state.huddle()?.stop_screen_capture();
+            state.huddle()?.stop_camera_capture();
             state.emit_huddle_state_changed();
         }
 

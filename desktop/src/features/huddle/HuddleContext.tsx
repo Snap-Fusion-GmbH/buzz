@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import * as React from "react";
 import { HuddleScreenProvider } from "./HuddleScreenContext";
+import { HuddleCameraProvider } from "./HuddleCameraContext";
 
 import { setupAudioWorklet, type AudioWorkletHandle } from "./lib/audioWorklet";
 import { type AudioInputDevice, useAudioDevices } from "./lib/useAudioDevices";
@@ -948,7 +949,12 @@ export function HuddleProvider({
           channelId={ephemeralChannelId}
           ownsCapture={ownsAudioSession}
         >
-          {children}
+          <HuddleCameraProvider
+            channelId={ephemeralChannelId}
+            ownsCapture={ownsAudioSession}
+          >
+            {children}
+          </HuddleCameraProvider>
         </HuddleScreenProvider>
       </HuddleLevelsContext.Provider>
     </HuddleContext.Provider>

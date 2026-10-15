@@ -34,6 +34,7 @@ import type { HuddleAgentVoiceSettings } from "./AgentVoiceMenu";
 import { MicControls, SpeakerControls } from "./MicControls";
 import { HuddleParticipantsControl } from "./ParticipantList";
 import { ScreenShareControl } from "./ScreenShareControl";
+import { CameraControl } from "./CameraControl";
 import { HuddleScreenViewer } from "./HuddleScreenViewer";
 import { beginChannelMembershipWrite } from "@/shared/api/channelMembershipWrites";
 import { truncateNpub } from "@/shared/lib/pubkey";
@@ -762,6 +763,7 @@ export function HuddleBar({
       <div className="flex shrink-0 items-center gap-2 justify-self-center">
         <div className="flex items-center gap-2">
           <ScreenShareControl />
+          <CameraControl />
           {mode === "main" ? <HuddleScreenViewer compact /> : null}
           <Popover
             onOpenChange={setIsReactionPickerOpen}

@@ -28,6 +28,7 @@ mod agent_tts_routing;
 pub mod agent_voice;
 pub mod agents;
 pub mod audio_output;
+pub mod camera;
 mod commands;
 mod human_floor;
 pub mod jitter;
@@ -51,6 +52,7 @@ mod tts_playback;
 pub mod tts_settings;
 mod tts_voice_import;
 mod tts_voice_registry;
+pub mod video;
 mod window;
 pub mod wire;
 
@@ -603,6 +605,7 @@ pub async fn leave_huddle(app: tauri::AppHandle, state: State<'_, AppState>) -> 
         }
         hs.phase = HuddlePhase::Leaving;
         hs.stop_screen_capture();
+        hs.stop_camera_capture();
         (
             hs.parent_channel_id.clone().unwrap_or_default(),
             hs.ephemeral_channel_id.clone().unwrap_or_default(),
@@ -678,6 +681,7 @@ pub async fn end_huddle(
         }
         hs.phase = HuddlePhase::Leaving;
         hs.stop_screen_capture();
+        hs.stop_camera_capture();
         (
             hs.parent_channel_id.clone().unwrap_or_default(),
             hs.ephemeral_channel_id.clone().unwrap_or_default(),

@@ -1,6 +1,6 @@
 //! Continuous native capture, H.264 encoding, and bounded live video batches.
 
-mod encoder;
+pub(super) mod encoder;
 #[cfg(target_os = "linux")]
 mod portal;
 
@@ -8,7 +8,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use buzz_core_pkg::huddle_screen::{ScreenMessage, ScreenShare, VIDEO_FPS};
-use nostr::{EventBuilder, JsonUtil, Kind, Tag};
 use serde::Serialize;
 use tauri::{Manager, State};
 use tokio::sync::{mpsc, Mutex};
@@ -89,21 +88,8 @@ impl Source {
     }
 }
 
-/// One continuous producer with a bounded queue and cancellation lease.
-#[derive(Debug)]
-pub struct ScreenCapture {
-    share: ScreenShare,
-    pubkey: nostr::PublicKey,
-    cancel: CancellationToken,
-    receiver: Mutex<mpsc::Receiver<ScreenMessage>>,
-}
-
-impl ScreenCapture {
-    /// Stop capture, encoding, and any pending media read on every exit path.
-    pub fn cancel(&self) {
-        self.cancel.cancel();
-    }
-}
+/// Screen capture uses the same bounded consent lease as camera video.
+pub type ScreenCapture = super::video::VideoCapture;
 
 fn available_sources() -> Result<Vec<(ScreenSource, Source)>, String> {
     #[cfg(target_os = "linux")]
@@ -378,61 +364,6 @@ pub async fn read_huddle_screen_video_chunk(
     session_id: String,
     state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
-    let session = Uuid::parse_str(&session_id).map_err(|e| e.to_string())?;
-    let (capture, channel, lifetime) = {
-        let hs = state.huddle()?;
-        let Some(capture) = hs
-            .screen_capture
-            .as_ref()
-            .filter(|capture| capture.share.session_id == session)
-        else {
-            return Ok(None);
-        };
-        let channel = hs.ephemeral_channel_id.clone().ok_or("No active huddle")?;
-        if !hs.is_current_huddle(&channel, hs.huddle_generation) {
-            return Ok(None);
-        }
-        (Arc::clone(capture), channel, hs.huddle_generation)
-    };
-    let keys = state.keys.lock().map_err(|e| e.to_string())?.clone();
-    let pubkey = keys.public_key();
-    if pubkey != capture.pubkey {
-        return Err("Screen sharing stopped because the signer changed".into());
-    }
-    let message = tokio::select! {
-        _ = capture.cancel.cancelled() => return Ok(None),
-        message = tokio::time::timeout(Duration::from_secs(1), async {
-            capture.receiver.lock().await.recv().await
-        }) => match message {
-            Ok(message) => message,
-            Err(_) => return Ok(None),
-        },
-    };
-    let Some(message) = message else {
-        return Ok(None);
-    };
-    let event_channel = channel.clone();
-    let event = tokio::task::spawn_blocking(move || {
-        EventBuilder::new(
-            Kind::Custom(buzz_core_pkg::kind::KIND_HUDDLE_SCREEN as u16),
-            serde_json::to_string(&message).map_err(|e| e.to_string())?,
-        )
-        .tags([Tag::parse(["h", event_channel.as_str()]).map_err(|e| e.to_string())?])
-        .sign_with_keys(&keys)
-        .map(|event| event.as_json())
-        .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-    if state.keys.lock().map_err(|e| e.to_string())?.public_key() != pubkey {
-        return Err("Screen sharing stopped because the signer changed".into());
-    }
-    let hs = state.huddle()?;
-    if capture.cancel.is_cancelled()
-        || !hs.is_current_huddle(&channel, lifetime)
-        || hs.screen_share.as_ref().map(|share| share.session_id) != Some(session)
-    {
-        return Ok(None);
-    }
-    Ok(Some(event))
+    super::video::read_video_chunk(session_id, &state, buzz_core_pkg::kind::KIND_HUDDLE_SCREEN)
+        .await
 }

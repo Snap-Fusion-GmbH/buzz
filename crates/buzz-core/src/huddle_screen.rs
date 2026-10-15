@@ -21,6 +21,10 @@ pub const MAX_CONTENT_BYTES: usize = 244 * 1024;
 pub const MAX_WIDTH: u32 = 1920;
 /// Maximum encoded height.
 pub const MAX_HEIGHT: u32 = 1080;
+/// Maximum webcam width, independent of the larger screen-share limit.
+pub const MAX_CAMERA_WIDTH: u32 = 1280;
+/// Maximum webcam height.
+pub const MAX_CAMERA_HEIGHT: u32 = 720;
 /// Target capture and playback cadence, independent of relay event rate.
 pub const VIDEO_FPS: u32 = 30;
 /// Maximum access units per transport event.
@@ -77,6 +81,11 @@ pub enum ScreenMessage {
         share: ScreenShare,
     },
 }
+
+/// Consent identity shared by screen and camera video tracks.
+pub type VideoShare = ScreenShare;
+/// The bounded H.264 wire format shared by independently scoped video tracks.
+pub type HuddleVideoMessage = ScreenMessage;
 
 /// Inspect an access unit without decoding pixels.
 ///
@@ -169,8 +178,25 @@ pub fn validate_access_unit(
 ///
 /// The caller separately verifies signatures and channel/community access.
 pub fn validate_screen_event(event: &Event, now: u64) -> Result<Uuid, String> {
-    if u32::from(event.kind.as_u16()) != crate::kind::KIND_HUDDLE_SCREEN {
-        return Err("invalid: not a huddle screen event".into());
+    validate_video_event(event, now, crate::kind::KIND_HUDDLE_SCREEN)
+}
+
+/// Validate a camera track without accepting screen events in its place.
+pub fn validate_camera_event(event: &Event, now: u64) -> Result<Uuid, String> {
+    validate_video_event(event, now, crate::kind::KIND_HUDDLE_CAMERA)
+}
+
+fn validate_video_event(event: &Event, now: u64, kind: u32) -> Result<Uuid, String> {
+    let camera = kind == crate::kind::KIND_HUDDLE_CAMERA;
+    let media = if camera { "camera" } else { "screen" };
+    let max_width = if camera { MAX_CAMERA_WIDTH } else { MAX_WIDTH };
+    let max_height = if camera {
+        MAX_CAMERA_HEIGHT
+    } else {
+        MAX_HEIGHT
+    };
+    if u32::from(event.kind.as_u16()) != kind {
+        return Err(format!("invalid: not a huddle {media} event"));
     }
     let channels: Vec<_> = event
         .tags
@@ -178,7 +204,7 @@ pub fn validate_screen_event(event: &Event, now: u64) -> Result<Uuid, String> {
         .filter(|tag| tag.as_slice().first().map(String::as_str) == Some("h"))
         .collect();
     if channels.len() != 1 || channels[0].as_slice().len() != 2 {
-        return Err("invalid: screen events require exactly one h tag".into());
+        return Err(format!("invalid: {media} events require exactly one h tag"));
     }
     let channel = Uuid::parse_str(&channels[0].as_slice()[1])
         .map_err(|_| "invalid: screen channel must be a UUID")?;
@@ -217,8 +243,8 @@ pub fn validate_screen_event(event: &Event, now: u64) -> Result<Uuid, String> {
             || sequence > 9_007_199_254_740_991
             || width == 0
             || height == 0
-            || width > MAX_WIDTH
-            || height > MAX_HEIGHT
+            || width > max_width
+            || height > max_height
             || frames.is_empty()
             || frames.len() > MAX_BATCH_FRAMES
             || codec.len() != 11
@@ -358,5 +384,24 @@ mod tests {
             *frames = vec![frames[0].clone(); MAX_BATCH_FRAMES + 1];
         }
         assert!(validate_screen_event(&event(&message, &[&channel]), 100).is_err());
+    }
+
+    #[test]
+    fn camera_events_are_separate_from_screen_events_and_remain_ephemeral() {
+        let channel = Uuid::new_v4().to_string();
+        let message = video();
+        let camera = EventBuilder::new(
+            Kind::Custom(crate::kind::KIND_HUDDLE_CAMERA as u16),
+            serde_json::to_string(&message).unwrap(),
+        )
+        .tags([Tag::parse(["h", channel.as_str()]).unwrap()])
+        .custom_created_at(Timestamp::from(100))
+        .sign_with_keys(&Keys::generate())
+        .unwrap();
+        assert!(validate_camera_event(&camera, 100).is_ok());
+        assert!(validate_screen_event(&camera, 100).is_err());
+        assert!(validate_camera_event(&event(&message, &[&channel]), 100).is_err());
+        assert!(crate::kind::is_ephemeral(crate::kind::KIND_HUDDLE_CAMERA));
+        assert!(validate_camera_event(&camera, 106).is_err());
     }
 }

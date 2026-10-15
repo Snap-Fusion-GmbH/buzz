@@ -33,11 +33,41 @@ pub struct ScreenVideoEncoder {
 impl ScreenVideoEncoder {
     /// Construct a low-latency screen-content encoder with periodic IDRs.
     pub fn new(share: ScreenShare) -> Result<Self, String> {
+        Self::configured(
+            share,
+            UsageType::ScreenContentRealTime,
+            Level::Level_4_0,
+            3_000_000,
+            (MAX_WIDTH, MAX_HEIGHT),
+        )
+    }
+
+    /// Use camera rate control while retaining the same bounded wire format.
+    pub fn camera(share: ScreenShare) -> Result<Self, String> {
+        Self::configured(
+            share,
+            UsageType::CameraVideoRealTime,
+            Level::Level_3_1,
+            1_200_000,
+            (
+                buzz_core_pkg::huddle_screen::MAX_CAMERA_WIDTH,
+                buzz_core_pkg::huddle_screen::MAX_CAMERA_HEIGHT,
+            ),
+        )
+    }
+
+    fn configured(
+        share: ScreenShare,
+        usage: UsageType,
+        level: Level,
+        bitrate: u32,
+        max_dimensions: (u32, u32),
+    ) -> Result<Self, String> {
         let config = EncoderConfig::new()
-            .usage_type(UsageType::ScreenContentRealTime)
+            .usage_type(usage)
             .profile(Profile::Baseline)
-            .level(Level::Level_4_0)
-            .bitrate(BitRate::from_bps(3_000_000))
+            .level(level)
+            .bitrate(BitRate::from_bps(bitrate))
             .rate_control_mode(RateControlMode::Bitrate)
             .max_frame_rate(FrameRate::from_hz(VIDEO_FPS as f32))
             .intra_frame_period(IntraFramePeriod::from_num_frames(VIDEO_FPS))
@@ -46,7 +76,7 @@ impl ScreenVideoEncoder {
             encoder: Encoder::with_api_config(OpenH264API::from_source(), config)
                 .map_err(|e| format!("Video encoder initialization failed: {e}"))?,
             dimensions: (0, 0),
-            max_dimensions: (MAX_WIDTH, MAX_HEIGHT),
+            max_dimensions,
             downscale_steps: 0,
             codec: String::new(),
             frames: Vec::new(),
@@ -392,5 +422,60 @@ mod tests {
             keys < count / 2,
             "delta frames are required, not a still-image slideshow"
         );
+    }
+
+    #[test]
+    fn camera_mode_produces_bounded_inter_frame_video_with_periodic_keyframes() {
+        let share = ScreenShare {
+            session_id: uuid::Uuid::new_v4(),
+            started_at: nostr::Timestamp::now().as_secs() * 1000,
+            label: "Camera test".into(),
+        };
+        let mut encoder = ScreenVideoEncoder::camera(share).unwrap();
+        let mut packets = Vec::new();
+        for frame in 0..60 {
+            let image = RgbaImage::from_fn(320, 180, |x, y| {
+                image::Rgba([(x.wrapping_add(frame * 4) % 256) as u8, y as u8, 100, 255])
+            });
+            packets.extend(encoder.push(image, u64::from(frame) * 33_333).unwrap());
+        }
+        packets.extend(encoder.flush());
+        let mut frames = 0;
+        let mut keys = 0;
+        let mut decoder = openh264::decoder::Decoder::new().unwrap();
+        for packet in packets {
+            let event = EventBuilder::new(
+                Kind::Custom(buzz_core_pkg::kind::KIND_HUDDLE_CAMERA as u16),
+                serde_json::to_string(&packet).unwrap(),
+            )
+            .tags([Tag::parse(["h", &uuid::Uuid::new_v4().to_string()]).unwrap()])
+            .sign_with_keys(&Keys::generate())
+            .unwrap();
+            buzz_core_pkg::huddle_screen::validate_camera_event(
+                &event,
+                nostr::Timestamp::now().as_secs(),
+            )
+            .unwrap();
+            let ScreenMessage::Video {
+                frames: batch,
+                width,
+                height,
+                ..
+            } = packet
+            else {
+                panic!("expected video");
+            };
+            assert!(width <= 1280 && height <= 720);
+            for frame in batch {
+                frames += 1;
+                keys += usize::from(frame.key);
+                assert!(decoder
+                    .decode(&STANDARD.decode(frame.data).unwrap())
+                    .unwrap()
+                    .is_some());
+            }
+        }
+        assert_eq!(frames, 60);
+        assert!((2..30).contains(&keys));
     }
 }
