@@ -1438,12 +1438,26 @@ async fn query_events_authed(
         .get_accessible_channel_ids_cached(tenant.community(), &pubkey_bytes)
         .await
         .map_err(|e| internal_error(&format!("channel access lookup: {e}")))?;
+    // System channels are outside `accessible_channels`; a filter that names
+    // one reads it in its own scope only (see `handlers::system_channels`).
+    let mut readable_system =
+        crate::handlers::system_channels::readable_system_channels_for_filters(
+            state,
+            tenant.community(),
+            &pubkey_bytes,
+            &filters,
+            &accessible_channels,
+            None,
+        )
+        .await
+        .map_err(|e| internal_error(&format!("system channel access lookup: {e}")))?;
     repair_requested_channel_access(
         state,
         tenant,
         &filters,
         &pubkey_bytes,
         &mut accessible_channels,
+        &mut readable_system,
     )
     .await?;
 
@@ -1459,6 +1473,7 @@ async fn query_events_authed(
             &raw_filters,
             &filters,
             &accessible_channels,
+            &readable_system,
             tenant,
             &authed_pubkey_hex,
             &pubkey_bytes,
@@ -1490,7 +1505,12 @@ async fn query_events_authed(
     // Resolve reply owners from retained thread metadata, including tombstones.
     for (idx, (raw, filter)) in raw_filters.iter().zip(filters.iter()).enumerate() {
         if extension_flag(raw, "resolve_thread_roots") {
-            events.extend(thread_roots::query(state, tenant, filter, &accessible_channels).await?);
+            let scope = crate::handlers::system_channels::filter_channel_scope(
+                filter,
+                &accessible_channels,
+                &readable_system,
+            );
+            events.extend(thread_roots::query(state, tenant, filter, &scope).await?);
             handled.insert(idx);
         }
     }
@@ -1506,7 +1526,11 @@ async fn query_events_authed(
             tenant,
             raw,
             filter,
-            &accessible_channels,
+            &crate::handlers::system_channels::filter_channel_scope(
+                filter,
+                &accessible_channels,
+                &readable_system,
+            ),
             &pubkey_bytes,
             &mut events,
         )
@@ -1628,6 +1652,11 @@ async fn query_events_authed(
             Ok(b) if b.len() == 32 => b,
             _ => continue,
         };
+        let accessible_channels = crate::handlers::system_channels::filter_channel_scope(
+            filter,
+            &accessible_channels,
+            &readable_system,
+        );
 
         if let Some(ch_id) = extract_channel_from_filter(filter) {
             if !accessible_channels.contains(&ch_id) {
@@ -1717,6 +1746,11 @@ async fn query_events_authed(
         if handled.contains(&idx) {
             continue;
         }
+        let accessible_channels = crate::handlers::system_channels::filter_channel_scope(
+            filter,
+            &accessible_channels,
+            &readable_system,
+        );
 
         if let Some(ch_id) = extract_channel_from_filter(filter) {
             if !accessible_channels.contains(&ch_id) {
@@ -1818,6 +1852,11 @@ async fn query_events_authed(
     // Phase 3 — post-processing, strictly in filter order.
     while let Some((idx, filter_events)) = catchall_results.next().await {
         let filter = &filters[idx];
+        let accessible_channels = crate::handlers::system_channels::filter_channel_scope(
+            filter,
+            &accessible_channels,
+            &readable_system,
+        );
         match filter_events {
             Ok(stored_events) => {
                 for se in stored_events {
@@ -1849,13 +1888,15 @@ async fn query_events_authed(
     Ok(Json(Value::Array(events)))
 }
 
-async fn repair_requested_channel_access(
+pub(crate) async fn repair_requested_channel_access(
     state: &AppState,
     tenant: &TenantContext,
     filters: &[nostr::Filter],
     pubkey_bytes: &[u8],
     accessible_channels: &mut Vec<uuid::Uuid>,
+    readable_system: &mut Vec<uuid::Uuid>,
 ) -> Result<(), (StatusCode, Json<Value>)> {
+    let repaired_from = accessible_channels.len();
     for filter in filters {
         let Some(requested) =
             crate::handlers::req::extract_channel_ids_from_filters(std::slice::from_ref(filter))
@@ -1863,7 +1904,8 @@ async fn repair_requested_channel_access(
             continue;
         };
         for channel_id in requested {
-            if accessible_channels.contains(&channel_id) {
+            // A readable system channel stays out of the request-wide set.
+            if accessible_channels.contains(&channel_id) || readable_system.contains(&channel_id) {
                 continue;
             }
             let is_member = state
@@ -1879,7 +1921,15 @@ async fn repair_requested_channel_access(
             );
         }
     }
-    Ok(())
+    crate::handlers::system_channels::keep_repaired_system_channels_named(
+        state,
+        tenant.community(),
+        accessible_channels,
+        repaired_from,
+        readable_system,
+    )
+    .await
+    .map_err(|e| internal_error(&format!("system channel access lookup: {e}")))
 }
 
 /// Count events via HTTP bridge (NIP-98 auth). Returns `{"count": N}`.
@@ -2035,17 +2085,36 @@ async fn count_events_authed(
         .get_accessible_channel_ids_cached(tenant.community(), &pubkey_bytes)
         .await
         .map_err(|e| internal_error(&format!("channel access lookup: {e}")))?;
+    // System channels are outside `accessible_channels`; a filter that names
+    // one reads it in its own scope only (see `handlers::system_channels`).
+    let mut readable_system =
+        crate::handlers::system_channels::readable_system_channels_for_filters(
+            state,
+            tenant.community(),
+            &pubkey_bytes,
+            &filters,
+            &accessible_channels,
+            None,
+        )
+        .await
+        .map_err(|e| internal_error(&format!("system channel access lookup: {e}")))?;
     repair_requested_channel_access(
         state,
         tenant,
         &filters,
         &pubkey_bytes,
         &mut accessible_channels,
+        &mut readable_system,
     )
     .await?;
 
     let mut total: u64 = 0;
-    for filter in &filters {
+    for (raw, filter) in raw.iter().zip(&filters) {
+        let accessible_channels = crate::handlers::system_channels::filter_channel_scope(
+            filter,
+            &accessible_channels,
+            &readable_system,
+        );
         let needs_author_only_filtering =
             crate::handlers::req::filter_can_match_author_only_kinds(filter);
         // Same result-gated guard as the WS COUNT handler: force the per-event
@@ -2092,6 +2161,9 @@ async fn count_events_authed(
                 ch_id,
                 &accessible_channels,
             );
+            if let Some(channel) = extract_buzz_channel(raw) {
+                query.custom_tag = Some(("buzz-channel".into(), channel.into()));
+            }
             // Shared-gated visibility pushdown: same as REQ and /query paths, so
             // the fallback's query_events call doesn't over-fetch private rows.
             if needs_shared_gate_filtering {
@@ -2161,6 +2233,9 @@ async fn count_events_authed(
             )
             .await;
             query.channel_ids = Some(accessible_channels.to_vec());
+            if let Some(channel) = extract_buzz_channel(raw) {
+                query.custom_tag = Some(("buzz-channel".into(), channel.into()));
+            }
             // Shared-gated visibility pushdown: pre-filter before ORDER/LIMIT on
             // the fallback query_events path.
             if needs_shared_gate_filtering {
@@ -2264,26 +2339,17 @@ fn search_hit_accepted(
 
 /// Handle search filters by routing to Postgres FTS, then fetching full events
 /// from DB. Supports a bridge-only `page` extension over the FTS result set.
+#[allow(clippy::too_many_arguments)]
 async fn handle_bridge_search(
     state: &AppState,
     raw_filters: &[Value],
     filters: &[nostr::Filter],
-    accessible_channels: &[uuid::Uuid],
+    implicit_channels: &[uuid::Uuid],
+    readable_system: &[uuid::Uuid],
     tenant: &buzz_core::tenant::TenantContext,
     reader_pubkey_hex: &str,
     pubkey_bytes: &[u8],
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    // Bridge always includes global (channel-less) events — same as WS with
-    // full scopes. `None` means no accessible channels and no global access →
-    // empty result set (the caller short-circuits exactly as the WS door EOSEs).
-    let channel_scope = match crate::handlers::req::build_search_channel_scope_filter(
-        accessible_channels,
-        true, // include_global
-    ) {
-        Some(scope) => scope,
-        None => return Ok(Json(Value::Array(Vec::new()))),
-    };
-
     let mut events: Vec<Value> = Vec::new();
     let mut seen_ids: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
 
@@ -2299,6 +2365,13 @@ async fn handle_bridge_search(
         if limit == 0 {
             continue;
         }
+        // Implicit channels plus the readable system channels this filter
+        // names; never another filter's.
+        let accessible_channels = &*crate::handlers::system_channels::filter_channel_scope(
+            filter,
+            implicit_channels,
+            readable_system,
+        );
 
         // Scope by channel — push the #h tag (intersected with accessible
         // channels) if present, else the community-wide scope.
@@ -2315,7 +2388,15 @@ async fn handle_bridge_search(
                 }
                 buzz_search::ChannelScope::Channels(valid)
             } else {
-                channel_scope.clone()
+                // Bridge always includes global (channel-less) events — same
+                // as WS with full scopes.
+                match crate::handlers::req::build_search_channel_scope_filter(
+                    accessible_channels,
+                    true, // include_global
+                ) {
+                    Some(scope) => scope,
+                    None => continue,
+                }
             };
 
         let kinds = filter.kinds.as_ref().and_then(|ks| {
@@ -2449,6 +2530,24 @@ pub async fn workflow_webhook(
         .await
         .map_err(|_| not_found("workflow not found"))?;
 
+    // Verify webhook secret. Prefer header (not logged by proxies); fall back to query param.
+    // Until the caller proves the secret, every failure answers like a missing
+    // workflow, so the response never reveals that the workflow exists, its
+    // trigger type, or whether a secret was configured.
+    let stored_secret = crate::webhook_secret::extract_secret(&workflow.definition);
+    let provided_secret = headers
+        .get("x-webhook-secret")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .or_else(|| query.secret.clone())
+        .unwrap_or_default();
+    if !stored_secret
+        .is_some_and(|secret| crate::webhook_secret::verify_secret(&provided_secret, &secret))
+    {
+        tracing::warn!("webhook: missing or invalid secret for workflow {id}");
+        return Err(not_found("workflow not found"));
+    }
+
     let def: buzz_workflow::WorkflowDef = serde_json::from_value(workflow.definition.clone())
         .map_err(|e| super::internal_error(&format!("corrupt workflow definition: {e}")))?;
 
@@ -2457,30 +2556,6 @@ pub async fn workflow_webhook(
             StatusCode::BAD_REQUEST,
             "workflow does not have a webhook trigger",
         ));
-    }
-
-    // Verify webhook secret. Prefer header (not logged by proxies); fall back to query param.
-    let stored_secret = crate::webhook_secret::extract_secret(&workflow.definition);
-    let provided_secret = headers
-        .get("x-webhook-secret")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-        .or_else(|| query.secret.clone())
-        .unwrap_or_default();
-
-    match &stored_secret {
-        Some(secret) => {
-            if !crate::webhook_secret::verify_secret(&provided_secret, secret) {
-                tracing::warn!("webhook: invalid secret for workflow {id}");
-                return Err(api_error(StatusCode::UNAUTHORIZED, "authentication failed"));
-            }
-        }
-        None => {
-            return Err(api_error(
-                StatusCode::UNAUTHORIZED,
-                "webhook secret required but not configured — re-save the workflow to generate one",
-            ));
-        }
     }
 
     // Parse optional JSON body as trigger context.
@@ -4439,6 +4514,73 @@ pub(crate) mod postgres_tests {
             .await
             .expect("read response body");
         (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    /// A workflow row without a channel has no readers, so even its owner
+    /// reads its runs exactly like a workflow that does not exist. Ingest
+    /// refuses channelless definitions, so the row is seeded directly.
+    /// Mutation: let a `None` channel through `authorize_workflow_read` → RED.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn channelless_workflow_runs_read_as_missing() {
+        use axum::body::Body;
+        use axum::http::{header, Request};
+        use tower::ServiceExt;
+
+        let state = bridge_handler_test_state()
+            .await
+            .expect("local Postgres not reachable");
+        let host = format!("channelless-{}.local", uuid::Uuid::new_v4().simple());
+        let community = state
+            .db
+            .ensure_configured_community(&host)
+            .await
+            .expect("ensure community")
+            .id;
+        let owner = Keys::generate();
+        state
+            .db
+            .ensure_user(community, owner.public_key().as_bytes())
+            .await
+            .expect("ensure user");
+        let workflow = state
+            .db
+            .create_workflow(
+                community,
+                None,
+                owner.public_key().as_bytes(),
+                "channelless",
+                "{}",
+                &[0u8; 32],
+            )
+            .await
+            .expect("seed workflow");
+        let read = |id: uuid::Uuid| {
+            let state = state.clone();
+            let host = host.clone();
+            let owner = owner.public_key().to_hex();
+            async move {
+                let resp = crate::router::build_router(state)
+                    .oneshot(
+                        Request::builder()
+                            .uri(format!("/workflows/{id}/runs"))
+                            .header(header::HOST, host)
+                            .header("x-pubkey", owner)
+                            .body(Body::empty())
+                            .expect("request"),
+                    )
+                    .await
+                    .expect("oneshot");
+                let status = resp.status();
+                let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                    .await
+                    .expect("body");
+                (status, body)
+            }
+        };
+        let missing = read(uuid::Uuid::new_v4()).await;
+        assert_eq!(missing.0, axum::http::StatusCode::NOT_FOUND, "{missing:?}");
+        assert_eq!(read(workflow).await, missing);
     }
 
     /// Collect buzz_events_rejected_total with (transport, reason) labels from
@@ -7707,6 +7849,7 @@ pub(crate) mod postgres_tests {
                     None,
                     author.public_key().to_bytes().as_slice(),
                     None,
+                    &[],
                 )
                 .await
                 .expect("create channel");
@@ -7945,6 +8088,7 @@ pub(crate) mod postgres_tests {
                 None,
                 author.public_key().to_bytes().as_slice(),
                 None,
+                &[],
             )
             .await
             .expect("create channel");
@@ -8396,7 +8540,9 @@ pub(crate) mod postgres_tests {
                 .await
                 .expect("local Postgres and Redis");
             // A schema whose `users` table can be taken away after the link,
-            // so only the owner-to-agent lookup fails at revoke time.
+            // so only the owner-to-agent lookup fails at revoke time. It
+            // carries `communities` and the deletion lock key so writes pass
+            // community write admission.
             let db_url = crate::test_support::database_url();
             let schema = format!("late_owner_{}", uuid::Uuid::new_v4().simple());
             sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
@@ -8405,7 +8551,10 @@ pub(crate) mod postgres_tests {
                  CREATE TABLE {schema}.community_bans (LIKE public.community_bans INCLUDING ALL); \
                  CREATE TABLE {schema}.relay_members (LIKE public.relay_members INCLUDING ALL); \
                  CREATE TABLE {schema}.join_policy_acceptances \
-                     (LIKE public.join_policy_acceptances INCLUDING ALL);"
+                     (LIKE public.join_policy_acceptances INCLUDING ALL); \
+                 CREATE TABLE {schema}.communities (LIKE public.communities INCLUDING ALL); \
+                 CREATE FUNCTION {schema}.community_deletion_lock_key(target UUID) RETURNS BIGINT \
+                 LANGUAGE SQL IMMUTABLE STRICT AS 'SELECT public.community_deletion_lock_key(target)';"
             )))
             .execute(state.db.pool())
             .await
@@ -8423,6 +8572,17 @@ pub(crate) mod postgres_tests {
 
             let tenant = fresh_tenant("late-owner.test");
             let other = fresh_tenant("late-owner-other.test");
+            // Both tenants pass community write admission in the schema.
+            for community in [&tenant, &other] {
+                sqlx::query(sqlx::AssertSqlSafe(format!(
+                    "INSERT INTO {schema}.communities (id, host) VALUES ($1, $2)"
+                )))
+                .bind(community.community().as_uuid())
+                .bind(community.host())
+                .execute(&admin)
+                .await
+                .expect("seed admitted community");
+            }
             let (owner, agent) = (Keys::generate(), Keys::generate());
             let agent_bytes = agent.public_key().to_bytes();
 

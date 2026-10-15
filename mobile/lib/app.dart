@@ -27,7 +27,7 @@ import 'features/pairing/pairing_provider.dart';
 import 'features/channels/agent_activity/observer_subscription.dart';
 import 'features/channels/channel_detail_page.dart';
 import 'features/channels/deep_link_dispatcher.dart';
-import 'features/channels/voice_note_recording.dart';
+import 'shared/widgets/app_route_observer.dart';
 import 'features/profile/user_status_cache_provider.dart';
 import 'features/profile/settings_profile_header.dart';
 import 'features/profile/set_status_sheet.dart';
@@ -311,11 +311,6 @@ class App extends HookConsumerWidget {
         ? ref.watch(communityThemeProvider)
         : defaultCommunityTheme;
     final themeMode = communityTheme.mode;
-    final accentIndex = effectiveAccentIndex(
-      communityTheme.theme,
-      communityTheme.accent,
-    );
-    final schemeName = communityTheme.theme;
     final authState = ref.watch(authProvider);
     final pairedCommunity = ref.watch(pairedCommunityLandingProvider);
 
@@ -325,25 +320,6 @@ class App extends HookConsumerWidget {
       });
       return null;
     }, const []);
-
-    final resolved = resolveSchemes(schemeName, themeMode);
-    final lightScheme = applyAccent(resolved.light, accentIndex);
-    final darkScheme = applyAccent(resolved.dark, accentIndex);
-    // Light/Dark modes pin the brightness; System leaves it null so Flutter
-    // follows the OS across the selected theme and its pair.
-    final effectiveMode = resolved.forcedMode ?? themeMode;
-
-    // Derive the gradient from the themes that produced each color scheme.
-    // This keeps fallbacks and pinned brightness changes aligned with the
-    // rendered palette rather than the raw persisted selection.
-    final buzzLightGradient = buzzTopSectionGradient(
-      resolved.lightTheme?.name ?? '',
-      lightScheme.brightness,
-    );
-    final buzzDarkGradient = buzzTopSectionGradient(
-      resolved.darkTheme?.name ?? '',
-      darkScheme.brightness,
-    );
 
     // Eagerly initialize websocket session and lifecycle observer when
     // authenticated. These providers connect and manage the websocket.
@@ -392,17 +368,11 @@ class App extends HookConsumerWidget {
 
     return MaterialApp(
       navigatorKey: _mobileRootNavigatorKey,
-      navigatorObservers: [voiceNoteRouteObserver],
+      navigatorObservers: [appRouteObserver],
       title: 'Buzz',
-      theme: AppTheme.light(
-        colorScheme: lightScheme,
-        topSectionGradient: buzzLightGradient,
-      ),
-      darkTheme: AppTheme.dark(
-        colorScheme: darkScheme,
-        topSectionGradient: buzzDarkGradient,
-      ),
-      themeMode: effectiveMode,
+      theme: mobileAppearanceTheme(Brightness.light, communityTheme.accent),
+      darkTheme: mobileAppearanceTheme(Brightness.dark, communityTheme.accent),
+      themeMode: themeMode,
       // Above the navigator, so an age restriction cannot be bypassed by a
       // route that was pushed while the store signal request was in flight.
       builder: (context, child) => switch (ageSignalState) {
