@@ -219,6 +219,26 @@ const scenarios = [
   ["mobile lockfile", ["mobile/pubspec.lock"], ["mobile"]],
   ["mobile release script", ["scripts/mobile-release.sh"], ["mobile"]],
   ["desktop", ["desktop/src/main.tsx"], ["desktop"]],
+  [
+    "shared math source",
+    ["desktop/packages/markdown-math/src/index.ts"],
+    ["desktop", "web"],
+  ],
+  [
+    "shared math stylesheet",
+    ["desktop/packages/markdown-math/src/styles.css"],
+    ["desktop", "web"],
+  ],
+  [
+    "shared math fixtures",
+    ["desktop/packages/markdown-math/test-fixtures/basic.json"],
+    ["desktop", "web"],
+  ],
+  [
+    "shared browser animation helper",
+    ["desktop/tests/helpers/animations.ts"],
+    ["desktop", "web"],
+  ],
   ["Tauri", ["desktop/src-tauri/src/main.rs"], ["desktop", "desktop-rust"]],
   ["relay", ["crates/buzz-relay/src/main.rs"], ["rust"]],
   ["migration", ["migrations/123.sql"], ["rust"]],

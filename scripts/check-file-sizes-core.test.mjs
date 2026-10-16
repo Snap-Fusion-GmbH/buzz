@@ -128,6 +128,9 @@ const entrypointCases = [
       { relativeFile: "src/shared/lib/oversized.ts", maxLines: 1200 },
       { relativeFile: "src/shared/ui/oversized.tsx", maxLines: 1200 },
       { relativeFile: "src/shared/styles/oversized.css", maxLines: 1200 },
+      { relativeFile: "packages/markdown-math/src/oversized.ts", maxLines: 1200 },
+      { relativeFile: "packages/markdown-math/src/oversized.tsx", maxLines: 1200 },
+      { relativeFile: "packages/markdown-math/src/oversized.css", maxLines: 1200 },
     ],
   },
   {
@@ -212,6 +215,7 @@ test("surface entrypoints expose the exact ordered production policies", () => {
         ["src/shared/lib", [".ts", ".tsx"], 1200],
         ["src/shared/ui", [".ts", ".tsx"], 1200],
         ["src/shared/styles", [".css"], 1200],
+        ["packages", [".ts", ".tsx", ".css"], 1200],
       ],
     ],
     [mobilePolicy, [["lib", [".dart"], 1200]]],

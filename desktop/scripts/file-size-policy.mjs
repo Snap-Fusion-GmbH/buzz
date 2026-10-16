@@ -50,4 +50,9 @@ export const rules = [
     extensions: new Set([".css"]),
     maxLines: DESKTOP_FRONTEND_MAX_LINES,
   },
+  {
+    root: "packages",
+    extensions: new Set([".ts", ".tsx", ".css"]),
+    maxLines: DESKTOP_FRONTEND_MAX_LINES,
+  },
 ];

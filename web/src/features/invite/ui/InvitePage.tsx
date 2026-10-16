@@ -12,6 +12,7 @@ import { Button } from "@/shared/ui/button";
 import * as React from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { rehypeBoundedKatex, remarkBoundedMath } from "@buzz/markdown-math";
 
 import { InviteJoinPolicyNotice } from "./InviteJoinPolicyNotice";
 
@@ -397,7 +398,10 @@ export function InvitePage({ code }: { code: string }) {
               </button>
             </div>
             <div className="prose prose-sm max-w-none">
-              <Markdown remarkPlugins={[remarkGfm]}>
+              <Markdown
+                remarkPlugins={[remarkGfm, remarkBoundedMath]}
+                rehypePlugins={[rehypeBoundedKatex]}
+              >
                 {document.markdown}
               </Markdown>
             </div>
