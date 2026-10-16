@@ -51,6 +51,11 @@ forward the ephemeral kind without them.
 Camera usage descriptions and macOS camera entitlements cover the opt-in flow.
 Browser detection retains redacted device entries and offers system-default
 capture, rather than treating pre-permission labels as missing hardware.
+The main window alone enumerates cameras. Companion pickers request its device
+list over channel-scoped local app events, because browser camera permission and
+device IDs belong to the capture-owning webview. Requests are correlated and
+bounded by a timeout; stale replies cannot repopulate a retired huddle. Discovery
+does not open a camera, and device IDs never leave the app.
 Relevant reports include [Tauri #6623](https://github.com/tauri-apps/tauri/issues/6623)
 (device release), [#15905](https://github.com/tauri-apps/tauri/issues/15905)
 (redacted device enumeration), and [#15277](https://github.com/tauri-apps/tauri/issues/15277)
@@ -88,10 +93,10 @@ workaround or claim unpatched affected runtimes work.
   local transport: a minute-long run averaged 25.5 presented FPS, followed by
   stop/restart, retired-session fences, and simulated-disconnection cleanup.
   FPS used presented-frame callbacks because decoder statistics could be stale.
-- The human subsequently confirmed live Linux-camera video displayed on the
-  Mac after both clients were upgraded. That confirmation preceded the final
-  demand-driven discovery cleanup; the updated picker-refresh flow still needs
-  human confirmation.
+- The human confirmed live Linux-camera video displayed on the Mac after both
+  clients were upgraded. On October 16, 2026, the human also tested the final
+  owner-mediated companion picker in the installed Linux build and confirmed
+  selection of the monitor webcam works.
 
 Mac camera hardware/permissions, physical LED release, Windows capture, and
 minimized-window behavior still need platform checks. Generated canvas streams

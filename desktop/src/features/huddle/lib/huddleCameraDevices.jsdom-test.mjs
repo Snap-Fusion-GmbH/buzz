@@ -6,9 +6,24 @@ import { createRoot } from "react-dom/client";
 
 const CHANNEL = "11111111-1111-4111-8111-111111111111";
 let nativeCameraError = null;
+let nextHandler = 0;
+const callbacks = new Map();
+const listeners = new Map();
+let sentEvents = [];
+let delayedListener = null;
+function dispatch(event, payload) {
+  for (const [id, listener] of [...listeners]) {
+    if (listener.event === event)
+      callbacks.get(listener.handler)?.({ event, id, payload });
+  }
+}
 const tauri = {
-  transformCallback: () => 1,
-  invoke: async (command) => {
+  transformCallback: (callback) => {
+    const id = ++nextHandler;
+    callbacks.set(id, callback);
+    return id;
+  },
+  invoke: async (command, args) => {
     if (command === "get_huddle_state")
       return {
         phase: "active",
@@ -16,8 +31,25 @@ const tauri = {
         camera_share: null,
         camera_error: nativeCameraError,
       };
-    if (command === "plugin:event|listen") return 1;
-    if (command === "plugin:event|unlisten") return null;
+    if (command === "plugin:event|listen") {
+      if (args.event === "huddle-camera-devices" && delayedListener) {
+        const wait = delayedListener;
+        delayedListener = null;
+        await wait;
+      }
+      const id = ++nextHandler;
+      listeners.set(id, args);
+      return id;
+    }
+    if (command === "plugin:event|unlisten") {
+      listeners.delete(args.eventId);
+      return null;
+    }
+    if (command === "plugin:event|emit") {
+      sentEvents.push(args);
+      dispatch(args.event, args.payload);
+      return null;
+    }
     throw new Error(`Unexpected native operation: ${command}`);
   },
 };
@@ -41,12 +73,15 @@ const previous = Object.getOwnPropertyDescriptor(navigator, "mediaDevices");
 let root;
 let container;
 let latest;
+let companion;
 let devices;
 let calls;
 let announcements;
 
-function Probe() {
-  latest = useHuddleCamera();
+function Probe({ peer = false }) {
+  const value = useHuddleCamera();
+  if (peer) companion = value;
+  else latest = value;
   return null;
 }
 
@@ -64,6 +99,11 @@ async function render(channelId = CHANNEL) {
 
 beforeEach(() => {
   nativeCameraError = null;
+  callbacks.clear();
+  listeners.clear();
+  companion = null;
+  sentEvents = [];
+  delayedListener = null;
   calls = 0;
   announcements = new Set();
   devices = new window.EventTarget();
@@ -179,4 +219,139 @@ test("refreshing device discovery does not erase a native camera failure", async
   await render();
   await act(async () => latest.refresh());
   assert.equal(latest.error, "Camera disconnected");
+});
+
+async function renderCompanion(withOwner = true) {
+  await act(async () => {
+    root.render(
+      React.createElement(
+        React.Fragment,
+        null,
+        withOwner
+          ? React.createElement(
+              HuddleCameraProvider,
+              { channelId: CHANNEL, ownsCapture: true },
+              React.createElement(Probe),
+            )
+          : null,
+        React.createElement(
+          HuddleCameraProvider,
+          { channelId: null, ownsCapture: false },
+          React.createElement(Probe, { peer: true }),
+        ),
+      ),
+    );
+  });
+}
+
+test("a companion never enumerates its own permission-redacted devices", async () => {
+  await renderCompanion(false);
+  assert.equal(calls, 0);
+  assert.equal(companion.checking, true);
+});
+
+test("the production companion receives owner device IDs and delegates refresh", async () => {
+  await renderCompanion();
+  assert.deepEqual(companion.cameras, [
+    { deviceId: "usb", label: "Camera usb" },
+  ]);
+  const before = calls;
+  devices.enumerateDevices = async () => {
+    calls++;
+    return [camera("monitor")];
+  };
+  await act(async () => companion.refresh());
+  assert.equal(calls, before + 1, "only the capture owner probes the hardware");
+  assert.deepEqual(companion.cameras, latest.cameras);
+  assert.deepEqual(companion.cameras, [
+    { deviceId: "monitor", label: "Camera monitor" },
+  ]);
+});
+
+test("a companion request sent before the owner subscribes is retried on owner readiness", async () => {
+  let ready;
+  delayedListener = new Promise((resolve) => {
+    ready = resolve;
+  });
+  await renderCompanion();
+  assert.deepEqual(companion.cameras, []);
+  await act(async () => ready());
+  assert.deepEqual(companion.cameras, [
+    { deviceId: "usb", label: "Camera usb" },
+  ]);
+  assert.equal(companion.checking, false);
+});
+
+test("owner discovery failures reach the companion and an explicit retry recovers", async () => {
+  await renderCompanion();
+  const previous = companion.cameras;
+  devices.enumerateDevices = async () => {
+    throw new Error("Monitor temporarily unavailable");
+  };
+  await act(async () => companion.refresh());
+  assert.match(companion.error, /Monitor temporarily unavailable/);
+  assert.equal(companion.cameras, previous);
+  assert.equal(companion.checking, false);
+  devices.enumerateDevices = async () => [camera("monitor")];
+  await act(async () => companion.refresh());
+  assert.equal(companion.error, null);
+  assert.equal(companion.cameras[0].deviceId, "monitor");
+});
+
+test("unrelated and retired huddle replies cannot replace companion devices", async () => {
+  await renderCompanion();
+  let resolve;
+  devices.enumerateDevices = () =>
+    new Promise((done) => {
+      resolve = done;
+    });
+  let refresh;
+  await act(async () => {
+    refresh = companion.refresh();
+  });
+  const requestId = sentEvents.findLast(
+    (event) => event.payload?.type === "request",
+  ).payload.requestId;
+  await act(async () => {
+    dispatch("huddle-camera-devices", {
+      channel: "another-room",
+      type: "result",
+      requestId,
+      result: { cameras: [{ deviceId: "foreign", label: "Foreign camera" }] },
+    });
+    dispatch("huddle-camera-devices", {
+      channel: CHANNEL,
+      type: "result",
+      requestId: "retired",
+      result: { cameras: [{ deviceId: "retired", label: "Retired camera" }] },
+    });
+  });
+  assert.equal(companion.cameras[0].deviceId, "usb");
+  assert.equal(companion.checking, true);
+  await act(async () => {
+    dispatch("huddle-state-changed", {
+      phase: "idle",
+      ephemeral_channel_id: null,
+      camera_share: null,
+    });
+  });
+  assert.deepEqual(companion.cameras, []);
+  await act(async () => {
+    resolve([camera("late")]);
+    await refresh;
+  });
+  assert.deepEqual(companion.cameras, []);
+  assert.equal(companion.checking, false);
+});
+
+test("a missing owner times out with a retryable error", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    await renderCompanion(false);
+    await act(async () => t.mock.timers.tick(5000));
+    assert.equal(companion.checking, false);
+    assert.match(companion.error, /capture window did not respond/);
+  } finally {
+    t.mock.timers.reset();
+  }
 });
