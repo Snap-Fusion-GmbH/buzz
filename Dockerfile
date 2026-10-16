@@ -123,7 +123,7 @@ ENV COREPACK_INTEGRITY_KEYS=${NPM_REGISTRY:+0}
 RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY patches/ patches/
-COPY packages/ packages/
+COPY desktop/packages/ desktop/packages/
 COPY web/package.json web/
 COPY admin-web/package.json admin-web/
 RUN pnpm install --frozen-lockfile --filter buzz-web --filter buzz-admin-web
