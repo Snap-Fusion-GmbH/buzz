@@ -93,7 +93,7 @@ export function HuddleCameraProvider({
     checking,
     error: deviceError,
     refresh,
-  } = useHuddleCameraDevices(active ? channel : null);
+  } = useHuddleCameraDevices(active ? channel : null, ownsCapture);
   const scope = React.useRef({ channel, active });
   scope.current = { channel, active };
   const controller = React.useRef<CameraController | null>(null);

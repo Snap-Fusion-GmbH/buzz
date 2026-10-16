@@ -51,6 +51,11 @@ forward the ephemeral kind without them.
 Camera usage descriptions and macOS camera entitlements cover the opt-in flow.
 Browser detection retains redacted device entries and offers system-default
 capture, rather than treating pre-permission labels as missing hardware.
+The main window alone enumerates cameras. Companion pickers request its device
+list over channel-scoped local app events, because browser camera permission and
+device IDs belong to the capture-owning webview. Requests are correlated and
+bounded by a timeout; stale replies cannot repopulate a retired huddle. Discovery
+does not open a camera, and device IDs never leave the app.
 Relevant reports include [Tauri #6623](https://github.com/tauri-apps/tauri/issues/6623)
 (device release), [#15905](https://github.com/tauri-apps/tauri/issues/15905)
 (redacted device enumeration), and [#15277](https://github.com/tauri-apps/tauri/issues/15277)
