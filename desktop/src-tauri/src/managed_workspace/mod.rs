@@ -261,6 +261,12 @@ pub(crate) async fn managed_workspace_status(
             profile: None,
         });
     };
+    if app_state.reset_failed.load(Ordering::Acquire) {
+        return Err("managed_workspace_reset_failed".into());
+    }
+    if app_state.keyring_locked.load(Ordering::Acquire) {
+        return Err("managed_workspace_identity_locked".into());
+    }
     let keys = app_state.signing_keys()?;
     let public_key = keys.public_key().to_hex();
     let mut result = ManagedWorkspaceStatus {

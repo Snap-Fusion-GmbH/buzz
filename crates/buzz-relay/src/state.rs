@@ -267,7 +267,7 @@ impl CommunityConnectionControl {
     /// `authorization_denied` transition, so its client sees the same denial
     /// as any other NIP-FI refusal; an Off-mode socket closes `AccessRevoked`.
     /// Neither overwrites a terminal response already chosen.
-    fn revoke_access(&self) {
+    pub(crate) fn revoke_access(&self) {
         let nip_fi = self
             .proven_identity
             .read()
@@ -1914,6 +1914,35 @@ impl AppState {
             + self
                 .community_connections
                 .disconnect_pubkey(community, pubkey, unowned_only)
+    }
+
+    /// Snapshot root and audio principals without retaining registry locks
+    /// across managed-lease database lookups.
+    pub(crate) fn managed_connection_subjects(
+        &self,
+    ) -> Vec<(CommunityId, Vec<u8>, CommunityConnectionControl)> {
+        let mut subjects = Vec::new();
+        for entry in self.conn_manager.connections.iter() {
+            match entry.authenticated_pubkey.read() {
+                Ok(key) => {
+                    if let Some(key) = key.as_ref() {
+                        subjects.push((
+                            entry.community_id,
+                            key.clone(),
+                            entry.community_control.clone(),
+                        ));
+                    }
+                }
+                Err(_) => entry.community_control.revoke_access(),
+            }
+        }
+        for entry in self.community_connections.connections.iter() {
+            let (community, control) = entry.value();
+            if let Some(key) = control.pubkey.get() {
+                subjects.push((*community, key.to_vec(), control.clone()));
+            }
+        }
+        subjects
     }
 
     /// Close every live session of `pubkey` and of the agents it owns, on

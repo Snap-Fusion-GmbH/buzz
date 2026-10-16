@@ -10,6 +10,9 @@ import {
 import { useCommunities } from "@/features/communities/useCommunities";
 import { markCommunityOnboardingComplete } from "@/features/onboarding/communityOnboarding";
 import { markMachineOnboardingComplete } from "@/features/onboarding/machineOnboarding";
+import { KeyringLockedScreen } from "@/features/onboarding/ui/KeyringLockedScreen";
+import { RelaunchRequiredScreen } from "@/features/onboarding/ui/RelaunchRequiredScreen";
+import { ResetFailedScreen } from "@/features/onboarding/ui/ResetFailedScreen";
 import {
   cancelManagedWorkspaceSignIn,
   getManagedWorkspaceStatus,
@@ -27,6 +30,9 @@ export function ManagedWorkspaceGate({ children }: { children: ReactNode }) {
   const [prepared, setPrepared] = useState<string | null>(null);
   const generation = useRef(0);
   const pendingRef = useRef(false);
+  const [recovery, setRecovery] = useState<
+    "locked" | "reset-failed" | "relaunch" | null
+  >(null);
 
   const check = useCallback(async () => {
     if (pendingRef.current) return;
@@ -36,9 +42,18 @@ export function ManagedWorkspaceGate({ children }: { children: ReactNode }) {
       if (generation.current !== expected || pendingRef.current) return;
       setStatus(result);
       setError(null);
-    } catch {
+      setRecovery((current) => (current === "locked" ? "relaunch" : current));
+    } catch (reason) {
       if (generation.current !== expected || pendingRef.current) return;
       setStatus(null);
+      if (reason === "managed_workspace_identity_locked") {
+        setRecovery("locked");
+        return;
+      }
+      if (reason === "managed_workspace_reset_failed") {
+        setRecovery("reset-failed");
+        return;
+      }
       setError("Workspace verification is unavailable.");
     }
   }, []);
@@ -121,6 +136,9 @@ export function ManagedWorkspaceGate({ children }: { children: ReactNode }) {
     void check();
   }
 
+  if (recovery === "locked") return <KeyringLockedScreen />;
+  if (recovery === "reset-failed") return <ResetFailedScreen />;
+  if (recovery === "relaunch") return <RelaunchRequiredScreen />;
   if (status?.enabled === false) return <>{children}</>;
   if (readyKey && readyKey === prepared) return <>{children}</>;
 

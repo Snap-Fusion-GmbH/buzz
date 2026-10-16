@@ -40,6 +40,10 @@ pub mod handlers;
 pub mod invite_token;
 /// Fixed-schema evidence for the relay's earliest startup steps.
 pub mod lifecycle;
+/// Opt-in directory-managed membership expiry and channel authority.
+pub mod managed_access;
+#[cfg(test)]
+mod managed_access_postgres_tests;
 /// Inter-relay mesh startup wiring (`BUZZ_MESH` seam).
 pub mod mesh_boot;
 /// Prometheus metrics: recorder, upkeep, HTTP middleware.

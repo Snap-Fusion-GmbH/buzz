@@ -100,6 +100,43 @@ pub async fn get_relay_member(
     .map_err(crate::error::DbError::from)
 }
 
+/// Read a member and the writer's clock together for database-issued leases.
+///
+/// `updated_at` is written by PostgreSQL. Returning its clock in the same query
+/// avoids granting extra time or transiently denying a new lease when an
+/// application host's clock differs from the database host's.
+pub async fn get_relay_member_with_clock(
+    pool: &PgPool,
+    community: CommunityId,
+    pubkey: &str,
+) -> Result<Option<(RelayMember, DateTime<Utc>)>> {
+    let mut connection =
+        observability::acquire_writer(pool, observability::WriterOperation::Authorization).await?;
+    let row = sqlx::query(
+        "SELECT pubkey, role, added_by, created_at, updated_at, \
+         clock_timestamp() AS observed_at FROM relay_members \
+         WHERE community_id=$1 AND pubkey=$2",
+    )
+    .bind(community.as_uuid())
+    .bind(pubkey)
+    .fetch_optional(&mut *connection)
+    .await?;
+    row.map(|row| -> std::result::Result<_, sqlx::Error> {
+        Ok((
+            RelayMember {
+                pubkey: row.try_get("pubkey")?,
+                role: row.try_get("role")?,
+                added_by: row.try_get("added_by")?,
+                created_at: row.try_get("created_at")?,
+                updated_at: row.try_get("updated_at")?,
+            },
+            row.try_get("observed_at")?,
+        ))
+    })
+    .transpose()
+    .map_err(DbError::from)
+}
+
 /// Returns all relay members of `community` ordered by `created_at` ascending.
 pub async fn list_relay_members(pool: &PgPool, community: CommunityId) -> Result<Vec<RelayMember>> {
     list_relay_members_with_operation(
@@ -1019,6 +1056,16 @@ impl Db {
         pubkey: &str,
     ) -> Result<Option<RelayMember>> {
         get_relay_member(&self.pool, community, pubkey).await
+    }
+
+    /// Writer-authoritative membership and writer clock for managed leases.
+    #[datastore_span(name = "get_relay_member_with_clock", system = "postgresql")]
+    pub async fn get_relay_member_with_clock(
+        &self,
+        community: CommunityId,
+        pubkey: &str,
+    ) -> Result<Option<(RelayMember, DateTime<Utc>)>> {
+        get_relay_member_with_clock(&self.pool, community, pubkey).await
     }
 
     /// Returns all relay members of `community` ordered by `created_at` ascending.

@@ -164,12 +164,23 @@ pub mod relay_members {
         community: CommunityId,
         pubkey_hex: &str,
         writer: bool,
-    ) -> buzz_db::Result<bool> {
+    ) -> Result<bool, String> {
+        if let Some(policy) = &state.config.managed_access {
+            return tokio::time::timeout(
+                crate::managed_access::LOOKUP_TIMEOUT,
+                state.db.get_relay_member_with_clock(community, pubkey_hex),
+            )
+            .await
+            .map_err(|_| "managed membership lookup timed out".to_string())?
+            .map(|record| record.is_some_and(|(record, now)| policy.admits(&record, now)))
+            .map_err(|error| error.to_string());
+        }
         if writer {
             state.db.is_relay_member_writer(community, pubkey_hex).await
         } else {
             state.db.is_relay_member(community, pubkey_hex).await
         }
+        .map_err(|error| error.to_string())
     }
 
     async fn check_membership(

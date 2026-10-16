@@ -130,3 +130,28 @@ test("verification outage stays blocked and offers a retry", async ({
   ).toBeVisible();
   await expect(page.getByTestId("app-sidebar")).toHaveCount(0);
 });
+
+test("locked system identity uses recovery without offering a replacement identity", async ({
+  page,
+}) => {
+  await installMockBridge(
+    page,
+    {
+      managedWorkspace: {
+        status: signedOut,
+        statusError: "managed_workspace_identity_locked",
+      },
+    },
+    { skipCommunitySeed: true, skipOnboardingSeed: true },
+  );
+  await page.goto("/");
+  await expect(page.getByTestId("keyring-locked")).toBeVisible();
+  await expect(page.getByTestId("relaunch-app")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Sign in with Microsoft" }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Create a new identity key" }),
+  ).toHaveCount(0);
+  await expect(page.getByTestId("app-sidebar")).toHaveCount(0);
+});

@@ -226,6 +226,9 @@ pub struct Config {
     /// are permitted regardless of auth method (API token, NIP-42).
     pub require_relay_membership: bool,
 
+    /// Optional directory-managed membership leases and controller-owned channels.
+    pub managed_access: Option<crate::managed_access::ManagedAccessPolicy>,
+
     /// Whether this deployment can serve huddle (voice) audio.
     ///
     /// Huddle audio frames are relayed peer-to-peer *within a single pod*
@@ -1402,6 +1405,11 @@ impl Config {
             partition_manager_create_enabled,
             partition_manager_advance_enabled,
             pubkey_allowlist_enabled,
+            managed_access: crate::managed_access::ManagedAccessPolicy::from_env(
+                require_relay_membership,
+                allow_nip_oa_auth,
+                relay_owner_pubkey.as_deref(),
+            )?,
             require_relay_membership,
             huddle_audio_available,
             mesh,

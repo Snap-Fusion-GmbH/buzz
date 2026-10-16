@@ -850,6 +850,7 @@ async fn run_relay_main(boot: BootTracker) -> anyhow::Result<()> {
         }
     }
     let state = Arc::new(app_state);
+    let _managed_access_monitor = buzz_relay::managed_access::spawn_monitor(&state);
     let has_startup_partition_audit = startup_partition_audit.is_some();
     if let Some(audit) = startup_partition_audit {
         state.record_partition_audit(audit);
