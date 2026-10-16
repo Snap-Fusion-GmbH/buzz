@@ -14,6 +14,9 @@
 ARG RUST_VERSION=1.95
 ARG NODE_VERSION=24
 ARG DEBIAN_VERSION=bookworm
+ARG RUST_BASE_IMAGE=rust:${RUST_VERSION}-${DEBIAN_VERSION}
+ARG NODE_BASE_IMAGE=node:${NODE_VERSION}-${DEBIAN_VERSION}-slim
+ARG RUNTIME_BASE_IMAGE=debian:${DEBIAN_VERSION}-slim
 
 # Optional extra CA bundle for builds behind a TLS-intercepting corporate proxy
 # (e.g. a Cloudflare/Zscaler gateway that re-signs TLS). Empty by default, so
@@ -28,7 +31,7 @@ ARG EXTRA_CA_CERTS=
 ARG NPM_REGISTRY=
 
 # ─── Stage 1: cargo-chef base ───────────────────────────────────────────────
-FROM rust:${RUST_VERSION}-${DEBIAN_VERSION} AS chef
+FROM ${RUST_BASE_IMAGE} AS chef
 # Trust an optional corporate-proxy CA before any network fetch (no-op if unset).
 ARG EXTRA_CA_CERTS
 COPY --chmod=0644 ${EXTRA_CA_CERTS:-Dockerfile} /tmp/extra-ca/src
@@ -90,7 +93,7 @@ RUN strip target/release/buzz-relay \
 # ─── Stage 4: web bundle (pnpm + vite) ──────────────────────────────────────
 # Independent of the Rust layers so a CSS change doesn't bust Rust cache and
 # vice versa.
-FROM node:${NODE_VERSION}-${DEBIAN_VERSION}-slim AS web-builder
+FROM ${NODE_BASE_IMAGE} AS web-builder
 WORKDIR /build
 # Trust an optional corporate-proxy CA so corepack + pnpm can fetch over an
 # intercepting TLS gateway (no-op if EXTRA_CA_CERTS is unset).
@@ -120,6 +123,7 @@ ENV COREPACK_INTEGRITY_KEYS=${NPM_REGISTRY:+0}
 RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY patches/ patches/
+COPY packages/ packages/
 COPY web/package.json web/
 COPY admin-web/package.json admin-web/
 RUN pnpm install --frozen-lockfile --filter buzz-web --filter buzz-admin-web
@@ -128,7 +132,7 @@ COPY admin-web/ admin-web/
 RUN pnpm -C web build && pnpm -C admin-web build
 
 # ─── Stage 5: shared runtime ────────────────────────────────────────────────
-FROM debian:${DEBIAN_VERSION}-slim AS runtime-base
+FROM ${RUNTIME_BASE_IMAGE} AS runtime-base
 
 # OCI annotations: required for GHCR to auto-link the image to this repo and
 # inherit its visibility. org.opencontainers.image.source is the load-bearing
