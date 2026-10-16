@@ -20,6 +20,7 @@ import type {
   ObservedUnreadResponse,
 } from "@/shared/api/tauriObservedUnread";
 import type { UnreadCatchUpChannelResult } from "@/shared/api/tauriUnreadCatchUp";
+import type { ManagedWorkspaceStatus } from "@/shared/api/tauriManagedWorkspace";
 import { relayClient } from "@/shared/api/relayClient";
 import { activateRateLimit } from "@/shared/api/relayRateLimitGate";
 import { resolveAgentParallelism } from "@/features/agents/lib/agentParallelism";
@@ -212,6 +213,13 @@ type MockHuddleSeed = {
 type E2eConfig = {
   mode?: "mock" | "relay";
   mock?: {
+    managedWorkspace?: {
+      status: ManagedWorkspaceStatus;
+      loginResult?: ManagedWorkspaceStatus;
+      statusError?: string;
+      loginError?: string;
+      loginDelayMs?: number;
+    };
     /** Tauri window label exposed to the app. Defaults to the main window. */
     windowLabel?: string;
     ttsSettings?: {
@@ -13565,6 +13573,41 @@ export function maybeInstallE2eTauriMocks() {
         return getRelayWsUrl(activeConfig);
       case "get_default_relay_url":
         return getRelayWsUrl(activeConfig);
+      case "managed_workspace_status":
+        if (activeConfig?.mock?.managedWorkspace?.statusError) {
+          throw activeConfig.mock.managedWorkspace.statusError;
+        }
+        return (
+          activeConfig?.mock?.managedWorkspace?.status ?? {
+            enabled: false,
+            signed_in: false,
+            workspace_id: null,
+            public_key: null,
+            profile: null,
+          }
+        );
+      case "managed_workspace_login": {
+        const managed = activeConfig?.mock?.managedWorkspace;
+        if (managed?.loginDelayMs) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, managed.loginDelayMs),
+          );
+        }
+        if (managed?.loginError) throw managed.loginError;
+        if (managed) {
+          managed.status = managed.loginResult ?? managed.status;
+          return managed.status;
+        }
+        return {
+          enabled: false,
+          signed_in: false,
+          workspace_id: null,
+          public_key: null,
+          profile: null,
+        };
+      }
+      case "cancel_managed_workspace_login":
+        return null;
       case "auto_connect_default_relay_enabled":
         return activeConfig?.autoConnectDefaultRelay ?? false;
       case "get_legacy_workspace_storage":

@@ -7,7 +7,9 @@ fn dev_keyring_service(configured: Option<String>) -> String {
 }
 
 pub(crate) fn keyring_service() -> &'static str {
-    if crate::build_identity::is_demo_build() {
+    if let Some(service) = crate::managed_workspace::identity_service() {
+        service
+    } else if crate::build_identity::is_demo_build() {
         static DEMO_SERVICE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
         DEMO_SERVICE
             .get_or_init(|| crate::build_identity::keyring_service().into_owned())

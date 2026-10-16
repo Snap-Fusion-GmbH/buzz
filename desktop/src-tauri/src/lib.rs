@@ -21,6 +21,8 @@ mod linux_media;
 #[cfg(target_os = "macos")]
 mod macos_notifications;
 mod managed_agents;
+mod managed_workspace;
+mod managed_workspace_config;
 mod media_proxy;
 #[cfg(feature = "mesh-llm")]
 mod mesh_llm;
@@ -230,6 +232,7 @@ pub fn run() {
         .manage(PendingEntityDeepLinks::default())
         .manage(BuilderlabSession::default())
         .manage(BuilderlabLogin::default())
+        .manage(managed_workspace::ManagedWorkspaceState::default())
         .manage(commands::pairing::PairingHandle::new())
         .manage(terminal_runtime::TerminalSessions::default())
         .manage(archive::sync::ArchiveSyncState::default())
@@ -544,6 +547,9 @@ pub fn run() {
             take_pending_entity_deep_link,
             acknowledge_pending_entity_deep_link,
             start_builderlab_login,
+            managed_workspace::managed_workspace_status,
+            managed_workspace::managed_workspace_login,
+            managed_workspace::cancel_managed_workspace_login,
             cancel_builderlab_login,
             get_builderlab_auth,
             clear_builderlab_auth,

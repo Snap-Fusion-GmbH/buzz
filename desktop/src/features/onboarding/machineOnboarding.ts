@@ -28,6 +28,15 @@ export function readMachineOnboardingCompletion(pubkey: string | null) {
   );
 }
 
+/** Record UI setup only after the managed backend has verified enrollment. */
+export function markMachineOnboardingComplete(pubkey: string) {
+  if (typeof window === "undefined" || !pubkey) return;
+  window.localStorage.setItem(
+    completionKey(MACHINE_ONBOARDING_COMPLETION_STORAGE_KEY, pubkey),
+    "true",
+  );
+}
+
 function clearMachineOnboardingCompletion(pubkey: string | null) {
   if (typeof window === "undefined" || !pubkey) return;
   window.localStorage.removeItem(
@@ -172,10 +181,7 @@ export function useMachineOnboardingState({
     (completedIdentityPubkey?: string) => {
       const pubkey = completedIdentityPubkey ?? currentPubkey;
       if (!pubkey) return;
-      window.localStorage.setItem(
-        completionKey(MACHINE_ONBOARDING_COMPLETION_STORAGE_KEY, pubkey),
-        "true",
-      );
+      markMachineOnboardingComplete(pubkey);
       // Clear the "continuing" marker so completion actually settles the flow.
       // Imported/recovered identities set continuingPubkeyRef to pin the stage
       // to "onboarding" until setup finishes; leaving it set after complete()

@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 import type { ChannelTemplate, RelayEvent } from "../../src/shared/api/types";
 import type { MockManagedAgentSeed } from "../../src/testing/e2eBridge";
+import type { ManagedWorkspaceStatus } from "../../src/shared/api/tauriManagedWorkspace";
 import { FEATURE_OVERRIDES_STORAGE_KEY, PREVIEW_FEATURE_IDS } from "./features";
 
 export const TEST_IDENTITIES = {
@@ -494,6 +495,13 @@ type MockBridgeOptions = {
    * or `import_identity` is invoked. Drives the identity-lost recovery UX in tests.
    */
   identityLost?: boolean;
+  managedWorkspace?: {
+    status: ManagedWorkspaceStatus;
+    loginResult?: ManagedWorkspaceStatus;
+    statusError?: string;
+    loginError?: string;
+    loginDelayMs?: number;
+  };
   /**
    * When true, `get_identity` returns `locked: true` until `import_identity` is
    * invoked. Drives the keyring-locked screen in tests.

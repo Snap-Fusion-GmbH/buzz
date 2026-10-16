@@ -43,6 +43,7 @@ import { PendingInviteGate } from "@/features/onboarding/ui/PendingInviteGate";
 import { KeyringLockedScreen } from "@/features/onboarding/ui/KeyringLockedScreen";
 import { RelaunchRequiredScreen } from "@/features/onboarding/ui/RelaunchRequiredScreen";
 import { ResetFailedScreen } from "@/features/onboarding/ui/ResetFailedScreen";
+import { ManagedWorkspaceGate } from "@/features/onboarding/ui/ManagedWorkspaceGate";
 import { loadCommunityDiscoveryAfterLeave } from "@/features/communities/communityStorage";
 import { useCommunityInit } from "@/features/communities/useCommunityInit";
 import { useNestNotifications } from "@/features/communities/useNestNotifications";
@@ -811,7 +812,9 @@ export function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <MachineBootstrap sharedIdentity={sharedIdentity} />
+      <ManagedWorkspaceGate>
+        <MachineBootstrap sharedIdentity={sharedIdentity} />
+      </ManagedWorkspaceGate>
     </QueryClientProvider>
   );
 }
