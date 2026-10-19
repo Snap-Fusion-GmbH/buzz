@@ -86,10 +86,15 @@ class _ChannelTile extends ConsumerWidget {
             ],
             if (isMuted) ...[
               const SizedBox(width: Grid.xxs),
-              Icon(
-                BuzzIcons.bellOff,
-                size: 12,
-                color: context.colors.onSurface.withValues(alpha: 0.4),
+              SizedBox(
+                width: _kChannelIconSize,
+                child: Center(
+                  child: Icon(
+                    BuzzIcons.bellOff,
+                    size: 12,
+                    color: context.colors.onSurface.withValues(alpha: 0.4),
+                  ),
+                ),
               ),
             ],
             if (!channel.isMember && !channel.isDm)
@@ -207,7 +212,7 @@ class _DmAvatar extends ConsumerWidget {
           AvatarImage(
             imageUrl: avatarUrl,
             radius: _kDmAvatarSize / 2,
-            backgroundColor: context.colors.primaryContainer,
+            backgroundColor: context.controlSurface,
             fallback: Text(
               initial,
               style: context.textTheme.labelSmall?.copyWith(

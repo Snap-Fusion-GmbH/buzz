@@ -401,6 +401,10 @@ test-unit:
     cargo test -p buzz-audio-client
     if command -v cargo-nextest &>/dev/null; then
         cargo nextest run -p buzz-core -p buzz-auth --lib
+        # Mesh JWKS proxy-bypass regression: infra-free loopback I/O with
+        # child-process environment isolation. Its integration-test binary
+        # is not selected by --lib above. Keep the Cargo fallback in step.
+        cargo nextest run -p buzz-auth --test mesh_jwks_proxy
         cargo nextest run -p buzz-audit --lib
         # Cross-pod disconnect payload tests (NIP-FI and community archive
         # fence); all infra-free.
@@ -450,9 +454,9 @@ test-unit:
             -E 'test(=bucket_index::tests::bucket_snapshot_json_round_trip_preserves_community_keys)'
         # buzz-admin: storage-snapshot worker, the community archive command
         # parser, validation, and propagation-evidence tests, and the partition
-        # audit outcome contract.
+        # audit outcome contract, and the NIP-FI binding command's policy loading and backfill report.
         cargo nextest run -p buzz-admin \
-            -E 'test(storage_snapshot) + test(/^communities::tests::/) + test(/^tests::communities_/) + test(=tests::partition_audit_outcomes_keep_their_json_names_and_exit_codes)'
+            -E 'test(storage_snapshot) + test(/^communities::tests::/) + test(/^tests::communities_/) + test(=tests::partition_audit_outcomes_keep_their_json_names_and_exit_codes) + test(/^nip_fi::tests::/)'
         # Multi-tenant conformance gate (buzz-conformance): the independent
         # replay checker + golden fixtures. No infra — pure in-process trace
         # replay — so it belongs in the unit job. Run all targets (lib + the
@@ -1024,10 +1028,14 @@ mobile-build-android:
 mobile-dev:
     #!/usr/bin/env bash
     set -euo pipefail
-    if ! pgrep -x Simulator &>/dev/null; then
-        open -a Simulator
-        sleep 3
+    developer_dir="$(xcode-select -p)"
+    simulator_app="$developer_dir/../Applications/DeviceHub.app"
+    if [[ ! -d "$simulator_app" ]]; then
+        simulator_app="$developer_dir/Applications/Simulator.app"
     fi
+    # Use the selected Xcode even when another version's app is already running.
+    open -a "$simulator_app"
+    sleep 3
     ./scripts/mobile-worktree-overrides.sh
     gateway_url="${BUZZ_PUSH_GATEWAY_URL:-}"
     overrides_file="{{mobile_dir}}/ios/Flutter/AppOverrides.xcconfig"
