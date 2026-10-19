@@ -87,6 +87,12 @@ run_unit_tests() {
   run_test_step "buzz-auth unit tests" \
     cargo test -p buzz-auth --lib -- --nocapture
 
+  # Mesh JWKS proxy-bypass regression: infra-free loopback I/O with
+  # child-process environment isolation. --lib does not select its binary.
+  # Keep this fallback in step with `just test-unit`.
+  run_test_step "buzz-auth mesh JWKS proxy regression" \
+    cargo test -p buzz-auth --test mesh_jwks_proxy -- --nocapture
+
   # Cross-pod disconnect payload tests (NIP-FI and community archive fence;
   # infra-free). Mirrors `just test-unit`.
   run_test_step "buzz-pubsub conn_control tests" \
@@ -137,6 +143,9 @@ run_unit_tests() {
 
   run_test_step "buzz-admin partition audit outcome contract test" \
     cargo test -p buzz-admin tests::partition_audit_outcomes_keep_their_json_names_and_exit_codes -- --exact --nocapture
+
+  run_test_step "buzz-admin NIP-FI binding command tests" \
+    cargo test -p buzz-admin nip_fi::tests -- --nocapture
 
   # Multi-tenant conformance gate: independent replay checker + golden
   # fixtures (buzz-conformance). Pure in-process trace replay, no infra.

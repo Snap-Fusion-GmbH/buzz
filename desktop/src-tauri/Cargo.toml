@@ -145,7 +145,7 @@ arboard = { version = "3", features = ["wayland-data-control"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 xcap = "0.9"
 openh264 = "0.9"
-zip = "8"
+zip = "9"
 flate2 = "1"
 sherpa-onnx = "1.12"
 regex = "1"

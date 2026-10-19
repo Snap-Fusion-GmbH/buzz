@@ -142,6 +142,30 @@ class SearchPage extends HookConsumerWidget {
               ),
               child: Row(
                 children: [
+                  if (nativeIos)
+                    IosGlassNavigationButton(
+                      key: const Key('search-close'),
+                      icon: IosGlassNavigationIcon.close,
+                      semanticLabel: 'Close search',
+                      onPressed: closeSearch,
+                      controlSize: 48,
+                      foregroundColor: searchPrimaryColor,
+                    )
+                  else
+                    SizedBox.square(
+                      key: const Key('search-close'),
+                      dimension: 48,
+                      child: IconButton(
+                        tooltip: 'Close search',
+                        onPressed: closeSearch,
+                        style: IconButton.styleFrom(
+                          backgroundColor: searchSurfaceColor,
+                          foregroundColor: searchPrimaryColor,
+                        ),
+                        icon: const Icon(BuzzIcons.x),
+                      ),
+                    ),
+                  const SizedBox(width: Grid.xxs),
                   Expanded(
                     child: SizedBox(
                       key: const Key('search-field-container'),
@@ -157,7 +181,7 @@ class SearchPage extends HookConsumerWidget {
                         child: BuzzSearchField(
                           controller: textController,
                           focusNode: focusNode,
-                          hintText: 'Search messages, channels, and people',
+                          hintText: 'Search',
                           iconColor: searchPrimaryColor,
                           inputColor: searchPrimaryColor,
                           placeholderColor: searchPlaceholderColor,
@@ -182,30 +206,6 @@ class SearchPage extends HookConsumerWidget {
                       ),
                     ),
                   ),
-                  const SizedBox(width: Grid.xxs),
-                  if (nativeIos)
-                    IosGlassNavigationButton(
-                      key: const Key('search-close'),
-                      icon: IosGlassNavigationIcon.close,
-                      semanticLabel: 'Close search',
-                      onPressed: closeSearch,
-                      controlSize: 48,
-                      foregroundColor: searchPrimaryColor,
-                    )
-                  else
-                    SizedBox.square(
-                      key: const Key('search-close'),
-                      dimension: 48,
-                      child: IconButton(
-                        tooltip: 'Close search',
-                        onPressed: closeSearch,
-                        style: IconButton.styleFrom(
-                          backgroundColor: searchSurfaceColor,
-                          foregroundColor: searchPrimaryColor,
-                        ),
-                        icon: const Icon(BuzzIcons.x),
-                      ),
-                    ),
                 ],
               ),
             ),
@@ -274,12 +274,16 @@ class _SearchBody extends ConsumerWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
-                BuzzIcons.search,
-                size: 64,
-                color: context.colors.onSurfaceVariant,
+              Container(
+                width: Grid.xxl,
+                height: Grid.xxl,
+                decoration: BoxDecoration(
+                  color: context.controlSurface,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(BuzzIcons.search, size: 40),
               ),
-              const SizedBox(height: Grid.xs),
+              const SizedBox(height: Grid.gutter),
               Text(
                 'Search messages, channels, and people',
                 textAlign: TextAlign.center,
@@ -324,41 +328,49 @@ class _SearchBody extends ConsumerWidget {
       );
     }
 
-    return ListView(
+    return CustomScrollView(
       key: const Key('search-results-list'),
-      padding: EdgeInsets.only(
-        bottom:
-            Grid.xl +
-            MediaQuery.paddingOf(context).bottom +
-            MediaQuery.viewInsetsOf(context).bottom,
-      ),
-      children: [
-        if (showChannels && state.channelResults.isNotEmpty)
-          _ChannelsSection(
-            channels: state.channelResults,
-            onResultSelected: recordResultSelection,
+      slivers: [
+        SliverPadding(
+          padding: EdgeInsets.only(
+            bottom:
+                Grid.xl +
+                MediaQuery.paddingOf(context).bottom +
+                MediaQuery.viewInsetsOf(context).bottom,
           ),
-        if (showPeople && state.userResults.isNotEmpty)
-          _PeopleSection(
-            users: state.userResults,
-            onResultSelected: recordResultSelection,
+          sliver: SliverMainAxisGroup(
+            slivers: [
+              if (showChannels && state.channelResults.isNotEmpty)
+                _ChannelsSection(
+                  channels: state.channelResults,
+                  onResultSelected: recordResultSelection,
+                ),
+              if (showPeople && state.userResults.isNotEmpty)
+                _PeopleSection(
+                  users: state.userResults,
+                  onResultSelected: recordResultSelection,
+                ),
+              if (showMessages && state.messageResults.isNotEmpty)
+                _MessagesSection(
+                  hits: state.messageResults,
+                  currentPubkey: currentPubkey,
+                  onResultSelected: recordResultSelection,
+                ),
+              if (state.isLoading)
+                const SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.all(Grid.sm),
+                    child: Center(
+                      child: BuzzLoadingIndicator(
+                        size: 36,
+                        semanticLabel: 'Loading more search results',
+                      ),
+                    ),
+                  ),
+                ),
+            ],
           ),
-        if (showMessages && state.messageResults.isNotEmpty)
-          _MessagesSection(
-            hits: state.messageResults,
-            currentPubkey: currentPubkey,
-            onResultSelected: recordResultSelection,
-          ),
-        if (state.isLoading)
-          const Padding(
-            padding: EdgeInsets.all(Grid.sm),
-            child: Center(
-              child: BuzzLoadingIndicator(
-                size: 36,
-                semanticLabel: 'Loading more search results',
-              ),
-            ),
-          ),
+        ),
       ],
     );
   }
@@ -468,57 +480,57 @@ class _ChannelsSection extends ConsumerWidget {
   });
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _SectionLabel(label: 'Channels'),
-        for (final channel in channels)
-          ListTile(
-            key: ValueKey('search-channel-row-${channel.id}'),
-            contentPadding: const EdgeInsets.symmetric(horizontal: Grid.gutter),
-            leading: Icon(
-              channelIcon(channel),
-              key: ValueKey('search-channel-leading-${channel.id}'),
-              size: 20,
-            ),
-            title: Text(
-              channel.name,
-              key: ValueKey('search-channel-title-${channel.id}'),
-              style: contentListTitleTextStyle,
-            ),
-            subtitle: channel.isMember
-                ? Text(
-                    '${channel.memberCount} member${channel.memberCount == 1 ? '' : 's'}',
-                    style: contentListBodyTextStyle.copyWith(
-                      color: context.colors.onSurfaceVariant,
-                    ),
-                  )
-                : null,
-            trailing: !channel.isMember && !channel.isDm
-                ? Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: Grid.half + 2,
-                      vertical: 3,
-                    ),
-                    decoration: BoxDecoration(
-                      color: context.colors.primary.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(Radii.sm),
-                    ),
-                    child: Text(
-                      'Open',
-                      style: context.textTheme.labelSmall?.copyWith(
-                        color: context.colors.primary,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  )
-                : null,
-            onTap: () {
-              onResultSelected();
-              _openSearchChannel(context, channel);
-            },
+    return SliverList.builder(
+      itemCount: channels.length + 1,
+      itemBuilder: (context, index) {
+        if (index == 0) return const _SectionLabel(label: 'Channels');
+        final channel = channels[index - 1];
+        return ListTile(
+          key: ValueKey('search-channel-row-${channel.id}'),
+          contentPadding: const EdgeInsets.symmetric(horizontal: Grid.gutter),
+          leading: Icon(
+            channelIcon(channel),
+            key: ValueKey('search-channel-leading-${channel.id}'),
+            size: 20,
           ),
-      ],
+          title: Text(
+            channel.name,
+            key: ValueKey('search-channel-title-${channel.id}'),
+            style: contentListTitleTextStyle,
+          ),
+          subtitle: channel.isMember
+              ? Text(
+                  '${channel.memberCount} member${channel.memberCount == 1 ? '' : 's'}',
+                  style: contentListBodyTextStyle.copyWith(
+                    color: context.colors.onSurfaceVariant,
+                  ),
+                )
+              : null,
+          trailing: !channel.isMember && !channel.isDm
+              ? Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: Grid.half + 2,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: context.colors.primary.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(Radii.sm),
+                  ),
+                  child: Text(
+                    'Open',
+                    style: context.textTheme.labelSmall?.copyWith(
+                      color: context.colors.primary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                )
+              : null,
+          onTap: () {
+            onResultSelected();
+            _openSearchChannel(context, channel);
+          },
+        );
+      },
     );
   }
 }
@@ -541,46 +553,46 @@ class _PeopleSection extends ConsumerWidget {
       },
       fallbackNames: {for (final user in users) user.pubkey: user.label},
     );
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _SectionLabel(label: 'People'),
-        for (final user in users)
-          ListTile(
-            key: ValueKey('search-person-row-${user.pubkey}'),
-            contentPadding: const EdgeInsets.symmetric(horizontal: Grid.gutter),
-            leading: AvatarImage(
-              key: ValueKey('search-person-leading-${user.pubkey}'),
-              imageUrl: user.avatarUrl,
-              radius: 20,
-              fallback: Text(user.initial),
-              isAgent: user.isAgent,
-            ),
-            title: Text(
-              names.labelFor(user.pubkey),
-              key: ValueKey('search-person-title-${user.pubkey}'),
-              style: contentListTitleTextStyle,
-            ),
-            subtitle: Text(
-              user.secondaryLabel,
-              style: contentListBodyTextStyle.copyWith(
-                color: context.colors.onSurfaceVariant,
-              ),
-            ),
-            onTap: () async {
-              onResultSelected();
-              final channel = await ref
-                  .read(channelActionsProvider)
-                  .openDm(pubkeys: [user.pubkey]);
-              if (!context.mounted) return;
-              await Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => ChannelDetailPage(channel: channel),
-                ),
-              );
-            },
+    return SliverList.builder(
+      itemCount: users.length + 1,
+      itemBuilder: (context, index) {
+        if (index == 0) return const _SectionLabel(label: 'People');
+        final user = users[index - 1];
+        return ListTile(
+          key: ValueKey('search-person-row-${user.pubkey}'),
+          contentPadding: const EdgeInsets.symmetric(horizontal: Grid.gutter),
+          leading: AvatarImage(
+            key: ValueKey('search-person-leading-${user.pubkey}'),
+            imageUrl: user.avatarUrl,
+            radius: 20,
+            fallback: Text(user.initial),
+            isAgent: user.isAgent,
           ),
-      ],
+          title: Text(
+            names.labelFor(user.pubkey),
+            key: ValueKey('search-person-title-${user.pubkey}'),
+            style: contentListTitleTextStyle,
+          ),
+          subtitle: Text(
+            user.secondaryLabel,
+            style: contentListBodyTextStyle.copyWith(
+              color: context.colors.onSurfaceVariant,
+            ),
+          ),
+          onTap: () async {
+            onResultSelected();
+            final channel = await ref
+                .read(channelActionsProvider)
+                .openDm(pubkeys: [user.pubkey]);
+            if (!context.mounted) return;
+            await Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => ChannelDetailPage(channel: channel),
+              ),
+            );
+          },
+        );
+      },
     );
   }
 }
@@ -612,20 +624,20 @@ class _MessagesSection extends HookConsumerWidget {
       return null;
     }, [preloadPubkeysKey]);
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _SectionLabel(label: 'Messages'),
-        for (final hit in hits)
-          _MessageTile(
-            hit: hit,
-            authorProfile: profiles[hit.pubkey.toLowerCase()],
-            userCache: profiles,
-            channel: channels.where((c) => c.id == hit.channelId).firstOrNull,
-            currentPubkey: currentPubkey,
-            onResultSelected: onResultSelected,
-          ),
-      ],
+    return SliverList.builder(
+      itemCount: hits.length + 1,
+      itemBuilder: (context, index) {
+        if (index == 0) return const _SectionLabel(label: 'Messages');
+        final hit = hits[index - 1];
+        return _MessageTile(
+          hit: hit,
+          authorProfile: profiles[hit.pubkey.toLowerCase()],
+          userCache: profiles,
+          channel: channels.where((c) => c.id == hit.channelId).firstOrNull,
+          currentPubkey: currentPubkey,
+          onResultSelected: onResultSelected,
+        );
+      },
     );
   }
 }
