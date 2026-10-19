@@ -27,6 +27,65 @@ use super::{api_error, db_read_error, internal_error, not_found, parse_query_or_
 mod thread_roots;
 mod thread_window;
 
+/// Authenticate a relay-owned JSON `POST` endpoint for a community member.
+///
+/// Binds the community from the request host, runs NIP-FI admission over a
+/// NIP-98 proof with a required payload hash, then applies the shared API rate
+/// limit, replay guard and relay membership check, in that order.
+#[allow(clippy::result_large_err)] // Response is the natural error type for axum handlers
+pub(crate) async fn authenticate_member_post(
+    state: &Arc<AppState>,
+    headers: &HeaderMap,
+    path: &str,
+    body: &[u8],
+) -> Result<(TenantContext, nostr::PublicKey), Response> {
+    let tenant = crate::nip_fi_shadow::bind_tenant(state, headers)
+        .await
+        .ok_or_else(|| {
+            api_error(
+                StatusCode::NOT_FOUND,
+                "relay: no community is configured for this host",
+            )
+            .into_response()
+        })?;
+
+    let expected_url = nip98_expected_url(&state.config.relay_url, &tenant, path);
+
+    // NIP-FI admission. [FI-TRACE-AUTHORITY-UNIFORM]
+    let admission = admit_nip_fi_http_on_state(
+        state,
+        headers,
+        make_nip98_closure_for_admission(
+            headers.clone(),
+            "POST",
+            expected_url,
+            Some(body.to_vec()),
+            true,
+            true,
+        ),
+    )?;
+    let pubkey = *admission.proven_pubkey();
+    let (event_id_bytes, signed_created_at) = admission.into_extra();
+
+    enforce_http_admission(state, &tenant, &pubkey)
+        .await
+        .map_err(|e| e.into_response())?;
+    check_nip98_replay(state, &tenant, event_id_bytes)
+        .await
+        .map_err(|e| e.into_response())?;
+    super::relay_members::enforce_relay_membership(
+        state,
+        tenant.community(),
+        &pubkey.to_bytes(),
+        super::relay_members::extract_auth_tag_header(headers),
+        signed_created_at,
+    )
+    .await
+    .map_err(|e| e.into_response())?;
+
+    Ok((tenant, pubkey))
+}
+
 pub(crate) async fn enforce_http_admission(
     state: &AppState,
     tenant: &TenantContext,
@@ -544,6 +603,15 @@ fn extract_search_mode(raw: &Value) -> buzz_search::SearchMode {
     {
         Some("prefix") => buzz_search::SearchMode::Prefix,
         _ => buzz_search::SearchMode::FullText,
+    }
+}
+
+/// Bridge-only `search_sort` extension, advertised as `buzz-search-sort`.
+/// Absent or unrecognized values keep relevance order.
+fn extract_search_sort(raw: &Value) -> buzz_search::SearchSort {
+    match raw.get("search_sort").and_then(Value::as_str) {
+        Some("newest") => buzz_search::SearchSort::Newest,
+        _ => buzz_search::SearchSort::Relevance,
     }
 }
 
@@ -1438,12 +1506,26 @@ async fn query_events_authed(
         .get_accessible_channel_ids_cached(tenant.community(), &pubkey_bytes)
         .await
         .map_err(|e| internal_error(&format!("channel access lookup: {e}")))?;
+    // System channels are outside `accessible_channels`; a filter that names
+    // one reads it in its own scope only (see `handlers::system_channels`).
+    let mut readable_system =
+        crate::handlers::system_channels::readable_system_channels_for_filters(
+            state,
+            tenant.community(),
+            &pubkey_bytes,
+            &filters,
+            &accessible_channels,
+            None,
+        )
+        .await
+        .map_err(|e| internal_error(&format!("system channel access lookup: {e}")))?;
     repair_requested_channel_access(
         state,
         tenant,
         &filters,
         &pubkey_bytes,
         &mut accessible_channels,
+        &mut readable_system,
     )
     .await?;
 
@@ -1459,6 +1541,7 @@ async fn query_events_authed(
             &raw_filters,
             &filters,
             &accessible_channels,
+            &readable_system,
             tenant,
             &authed_pubkey_hex,
             &pubkey_bytes,
@@ -1490,7 +1573,12 @@ async fn query_events_authed(
     // Resolve reply owners from retained thread metadata, including tombstones.
     for (idx, (raw, filter)) in raw_filters.iter().zip(filters.iter()).enumerate() {
         if extension_flag(raw, "resolve_thread_roots") {
-            events.extend(thread_roots::query(state, tenant, filter, &accessible_channels).await?);
+            let scope = crate::handlers::system_channels::filter_channel_scope(
+                filter,
+                &accessible_channels,
+                &readable_system,
+            );
+            events.extend(thread_roots::query(state, tenant, filter, &scope).await?);
             handled.insert(idx);
         }
     }
@@ -1506,7 +1594,11 @@ async fn query_events_authed(
             tenant,
             raw,
             filter,
-            &accessible_channels,
+            &crate::handlers::system_channels::filter_channel_scope(
+                filter,
+                &accessible_channels,
+                &readable_system,
+            ),
             &pubkey_bytes,
             &mut events,
         )
@@ -1628,6 +1720,11 @@ async fn query_events_authed(
             Ok(b) if b.len() == 32 => b,
             _ => continue,
         };
+        let accessible_channels = crate::handlers::system_channels::filter_channel_scope(
+            filter,
+            &accessible_channels,
+            &readable_system,
+        );
 
         if let Some(ch_id) = extract_channel_from_filter(filter) {
             if !accessible_channels.contains(&ch_id) {
@@ -1717,6 +1814,11 @@ async fn query_events_authed(
         if handled.contains(&idx) {
             continue;
         }
+        let accessible_channels = crate::handlers::system_channels::filter_channel_scope(
+            filter,
+            &accessible_channels,
+            &readable_system,
+        );
 
         if let Some(ch_id) = extract_channel_from_filter(filter) {
             if !accessible_channels.contains(&ch_id) {
@@ -1818,6 +1920,11 @@ async fn query_events_authed(
     // Phase 3 — post-processing, strictly in filter order.
     while let Some((idx, filter_events)) = catchall_results.next().await {
         let filter = &filters[idx];
+        let accessible_channels = crate::handlers::system_channels::filter_channel_scope(
+            filter,
+            &accessible_channels,
+            &readable_system,
+        );
         match filter_events {
             Ok(stored_events) => {
                 for se in stored_events {
@@ -1849,37 +1956,42 @@ async fn query_events_authed(
     Ok(Json(Value::Array(events)))
 }
 
-async fn repair_requested_channel_access(
+pub(crate) async fn repair_requested_channel_access(
     state: &AppState,
     tenant: &TenantContext,
     filters: &[nostr::Filter],
     pubkey_bytes: &[u8],
     accessible_channels: &mut Vec<uuid::Uuid>,
+    readable_system: &mut Vec<uuid::Uuid>,
 ) -> Result<(), (StatusCode, Json<Value>)> {
-    for filter in filters {
-        let Some(requested) =
+    let repaired_from = accessible_channels.len();
+    let requested: Vec<uuid::Uuid> = filters
+        .iter()
+        .filter_map(|filter| {
             crate::handlers::req::extract_channel_ids_from_filters(std::slice::from_ref(filter))
-        else {
-            continue;
-        };
-        for channel_id in requested {
-            if accessible_channels.contains(&channel_id) {
-                continue;
-            }
-            let is_member = state
-                .db
-                .is_member(tenant.community(), channel_id, pubkey_bytes)
-                .await
-                .map_err(|e| internal_error(&format!("channel membership confirmation: {e}")))?;
-            crate::handlers::req::resolve_request_local_access(
-                accessible_channels,
-                channel_id,
-                true,
-                Some(is_member),
-            );
-        }
-    }
-    Ok(())
+        })
+        .flatten()
+        .collect();
+    crate::handlers::req::confirm_requested_channel_access(
+        state,
+        tenant.community(),
+        pubkey_bytes,
+        &requested,
+        None,
+        accessible_channels,
+        readable_system,
+    )
+    .await
+    .map_err(|e| internal_error(&format!("channel membership confirmation: {e}")))?;
+    crate::handlers::system_channels::keep_repaired_system_channels_named(
+        state,
+        tenant.community(),
+        accessible_channels,
+        repaired_from,
+        readable_system,
+    )
+    .await
+    .map_err(|e| internal_error(&format!("system channel access lookup: {e}")))
 }
 
 /// Count events via HTTP bridge (NIP-98 auth). Returns `{"count": N}`.
@@ -2035,17 +2147,36 @@ async fn count_events_authed(
         .get_accessible_channel_ids_cached(tenant.community(), &pubkey_bytes)
         .await
         .map_err(|e| internal_error(&format!("channel access lookup: {e}")))?;
+    // System channels are outside `accessible_channels`; a filter that names
+    // one reads it in its own scope only (see `handlers::system_channels`).
+    let mut readable_system =
+        crate::handlers::system_channels::readable_system_channels_for_filters(
+            state,
+            tenant.community(),
+            &pubkey_bytes,
+            &filters,
+            &accessible_channels,
+            None,
+        )
+        .await
+        .map_err(|e| internal_error(&format!("system channel access lookup: {e}")))?;
     repair_requested_channel_access(
         state,
         tenant,
         &filters,
         &pubkey_bytes,
         &mut accessible_channels,
+        &mut readable_system,
     )
     .await?;
 
     let mut total: u64 = 0;
-    for filter in &filters {
+    for (raw, filter) in raw.iter().zip(&filters) {
+        let accessible_channels = crate::handlers::system_channels::filter_channel_scope(
+            filter,
+            &accessible_channels,
+            &readable_system,
+        );
         let needs_author_only_filtering =
             crate::handlers::req::filter_can_match_author_only_kinds(filter);
         // Same result-gated guard as the WS COUNT handler: force the per-event
@@ -2072,9 +2203,10 @@ async fn count_events_authed(
                 std::slice::from_ref(filter),
             )
             .unwrap_or_default();
+            let accessible: std::collections::HashSet<_> = accessible_channels.iter().collect();
             if !requested
                 .iter()
-                .any(|channel_id| accessible_channels.contains(channel_id))
+                .any(|channel_id| accessible.contains(channel_id))
             {
                 continue;
             }
@@ -2092,6 +2224,9 @@ async fn count_events_authed(
                 ch_id,
                 &accessible_channels,
             );
+            if let Some(channel) = extract_buzz_channel(raw) {
+                query.custom_tag = Some(("buzz-channel".into(), channel.into()));
+            }
             // Shared-gated visibility pushdown: same as REQ and /query paths, so
             // the fallback's query_events call doesn't over-fetch private rows.
             if needs_shared_gate_filtering {
@@ -2161,6 +2296,9 @@ async fn count_events_authed(
             )
             .await;
             query.channel_ids = Some(accessible_channels.to_vec());
+            if let Some(channel) = extract_buzz_channel(raw) {
+                query.custom_tag = Some(("buzz-channel".into(), channel.into()));
+            }
             // Shared-gated visibility pushdown: pre-filter before ORDER/LIMIT on
             // the fallback query_events path.
             if needs_shared_gate_filtering {
@@ -2264,26 +2402,17 @@ fn search_hit_accepted(
 
 /// Handle search filters by routing to Postgres FTS, then fetching full events
 /// from DB. Supports a bridge-only `page` extension over the FTS result set.
+#[allow(clippy::too_many_arguments)]
 async fn handle_bridge_search(
     state: &AppState,
     raw_filters: &[Value],
     filters: &[nostr::Filter],
-    accessible_channels: &[uuid::Uuid],
+    implicit_channels: &[uuid::Uuid],
+    readable_system: &[uuid::Uuid],
     tenant: &buzz_core::tenant::TenantContext,
     reader_pubkey_hex: &str,
     pubkey_bytes: &[u8],
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    // Bridge always includes global (channel-less) events — same as WS with
-    // full scopes. `None` means no accessible channels and no global access →
-    // empty result set (the caller short-circuits exactly as the WS door EOSEs).
-    let channel_scope = match crate::handlers::req::build_search_channel_scope_filter(
-        accessible_channels,
-        true, // include_global
-    ) {
-        Some(scope) => scope,
-        None => return Ok(Json(Value::Array(Vec::new()))),
-    };
-
     let mut events: Vec<Value> = Vec::new();
     let mut seen_ids: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
 
@@ -2299,6 +2428,13 @@ async fn handle_bridge_search(
         if limit == 0 {
             continue;
         }
+        // Implicit channels plus the readable system channels this filter
+        // names; never another filter's.
+        let accessible_channels = &*crate::handlers::system_channels::filter_channel_scope(
+            filter,
+            implicit_channels,
+            readable_system,
+        );
 
         // Scope by channel — push the #h tag (intersected with accessible
         // channels) if present, else the community-wide scope.
@@ -2315,7 +2451,15 @@ async fn handle_bridge_search(
                 }
                 buzz_search::ChannelScope::Channels(valid)
             } else {
-                channel_scope.clone()
+                // Bridge always includes global (channel-less) events — same
+                // as WS with full scopes.
+                match crate::handlers::req::build_search_channel_scope_filter(
+                    accessible_channels,
+                    true, // include_global
+                ) {
+                    Some(scope) => scope,
+                    None => continue,
+                }
             };
 
         let kinds = filter.kinds.as_ref().and_then(|ks| {
@@ -2346,6 +2490,7 @@ async fn handle_bridge_search(
             page: search_page,
             per_page: limit,
             mode: search_mode,
+            sort: extract_search_sort(raw),
         };
 
         let search_result = state
@@ -2369,7 +2514,7 @@ async fn handle_bridge_search(
             .await
             .map_err(|e| db_read_error("search fetch error", &e))?;
 
-        // Build lookup map to preserve FTS relevance ordering.
+        // Build lookup map to preserve FTS ordering.
         let event_map: std::collections::HashMap<[u8; 32], &buzz_core::StoredEvent> = stored_events
             .iter()
             .map(|ev| (ev.event.id.to_bytes(), ev))
@@ -2449,6 +2594,24 @@ pub async fn workflow_webhook(
         .await
         .map_err(|_| not_found("workflow not found"))?;
 
+    // Verify webhook secret. Prefer header (not logged by proxies); fall back to query param.
+    // Until the caller proves the secret, every failure answers like a missing
+    // workflow, so the response never reveals that the workflow exists, its
+    // trigger type, or whether a secret was configured.
+    let stored_secret = crate::webhook_secret::extract_secret(&workflow.definition);
+    let provided_secret = headers
+        .get("x-webhook-secret")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .or_else(|| query.secret.clone())
+        .unwrap_or_default();
+    if !stored_secret
+        .is_some_and(|secret| crate::webhook_secret::verify_secret(&provided_secret, &secret))
+    {
+        tracing::warn!("webhook: missing or invalid secret for workflow {id}");
+        return Err(not_found("workflow not found"));
+    }
+
     let def: buzz_workflow::WorkflowDef = serde_json::from_value(workflow.definition.clone())
         .map_err(|e| super::internal_error(&format!("corrupt workflow definition: {e}")))?;
 
@@ -2457,30 +2620,6 @@ pub async fn workflow_webhook(
             StatusCode::BAD_REQUEST,
             "workflow does not have a webhook trigger",
         ));
-    }
-
-    // Verify webhook secret. Prefer header (not logged by proxies); fall back to query param.
-    let stored_secret = crate::webhook_secret::extract_secret(&workflow.definition);
-    let provided_secret = headers
-        .get("x-webhook-secret")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-        .or_else(|| query.secret.clone())
-        .unwrap_or_default();
-
-    match &stored_secret {
-        Some(secret) => {
-            if !crate::webhook_secret::verify_secret(&provided_secret, secret) {
-                tracing::warn!("webhook: invalid secret for workflow {id}");
-                return Err(api_error(StatusCode::UNAUTHORIZED, "authentication failed"));
-            }
-        }
-        None => {
-            return Err(api_error(
-                StatusCode::UNAUTHORIZED,
-                "webhook secret required but not configured — re-save the workflow to generate one",
-            ));
-        }
     }
 
     // Parse optional JSON body as trigger context.
@@ -3174,6 +3313,26 @@ pub(crate) mod postgres_tests {
             extract_search_mode(&serde_json::json!({ "search": "pro", "search_mode": "word" })),
             buzz_search::SearchMode::FullText
         );
+    }
+
+    #[test]
+    fn bridge_search_sort_extension_selects_newest_only_when_named() {
+        for (raw, expected) in [
+            (
+                serde_json::json!({ "search": "pro" }),
+                buzz_search::SearchSort::Relevance,
+            ),
+            (
+                serde_json::json!({ "search": "pro", "search_sort": "oldest" }),
+                buzz_search::SearchSort::Relevance,
+            ),
+            (
+                serde_json::json!({ "search": "pro", "search_sort": "newest" }),
+                buzz_search::SearchSort::Newest,
+            ),
+        ] {
+            assert_eq!(extract_search_sort(&raw), expected);
+        }
     }
 
     #[test]
@@ -4441,6 +4600,73 @@ pub(crate) mod postgres_tests {
         (status, String::from_utf8_lossy(&bytes).into_owned())
     }
 
+    /// A workflow row without a channel has no readers, so even its owner
+    /// reads its runs exactly like a workflow that does not exist. Ingest
+    /// refuses channelless definitions, so the row is seeded directly.
+    /// Mutation: let a `None` channel through `authorize_workflow_read` → RED.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn channelless_workflow_runs_read_as_missing() {
+        use axum::body::Body;
+        use axum::http::{header, Request};
+        use tower::ServiceExt;
+
+        let state = bridge_handler_test_state()
+            .await
+            .expect("local Postgres not reachable");
+        let host = format!("channelless-{}.local", uuid::Uuid::new_v4().simple());
+        let community = state
+            .db
+            .ensure_configured_community(&host)
+            .await
+            .expect("ensure community")
+            .id;
+        let owner = Keys::generate();
+        state
+            .db
+            .ensure_user(community, owner.public_key().as_bytes())
+            .await
+            .expect("ensure user");
+        let workflow = state
+            .db
+            .create_workflow(
+                community,
+                None,
+                owner.public_key().as_bytes(),
+                "channelless",
+                "{}",
+                &[0u8; 32],
+            )
+            .await
+            .expect("seed workflow");
+        let read = |id: uuid::Uuid| {
+            let state = state.clone();
+            let host = host.clone();
+            let owner = owner.public_key().to_hex();
+            async move {
+                let resp = crate::router::build_router(state)
+                    .oneshot(
+                        Request::builder()
+                            .uri(format!("/workflows/{id}/runs"))
+                            .header(header::HOST, host)
+                            .header("x-pubkey", owner)
+                            .body(Body::empty())
+                            .expect("request"),
+                    )
+                    .await
+                    .expect("oneshot");
+                let status = resp.status();
+                let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                    .await
+                    .expect("body");
+                (status, body)
+            }
+        };
+        let missing = read(uuid::Uuid::new_v4()).await;
+        assert_eq!(missing.0, axum::http::StatusCode::NOT_FOUND, "{missing:?}");
+        assert_eq!(read(workflow).await, missing);
+    }
+
     /// Collect buzz_events_rejected_total with (transport, reason) labels from
     /// a DebuggingRecorder snapshot.
     fn http_reject_counts(
@@ -5700,7 +5926,7 @@ pub(crate) mod postgres_tests {
     // 401 `authentication required\n`.
     //
     // Note: removing only the outer guard does NOT change this test — the
-    // handler's own `admit_nip_fi_http_on_state` in `gifs::authenticate` also
+    // handler's own `admit_nip_fi_http_on_state` in `authenticate_member_post` also
     // fires 401 on missing assertion.  This test witnesses the outer guard fires
     // first and its error path is exercised; it does not claim the outer guard is
     // the sole denial point.  The same-key positive (below) is the complement witness.
@@ -5904,6 +6130,72 @@ pub(crate) mod postgres_tests {
             "GIF search same-key positive: exact 404 body must be JSON \
              {{\"error\":\"GIF search is not configured\"}}. \
              Falsifying mutation: make handler always-deny → 403 body differs."
+        );
+    }
+
+    // ── Profile name search — Enforce mode, end to end ─────────────────────
+    //
+    // An admitted member gets signed kind:0 events whose `name` or
+    // `display_name` matches. A profile that carries the query only in its
+    // avatar data URL, `about` or `nip05` is not returned.
+    #[test]
+    #[ignore = "requires Postgres"]
+    fn profile_search_same_key_returns_only_name_matches() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current_thread runtime");
+
+        let Some(state) = rt.block_on(nip_fi_enforce_test_state_with_verifier()) else {
+            panic!("local Postgres not reachable");
+        };
+        let host = format!(
+            "nip-fi-profile-search-{}.local",
+            uuid::Uuid::new_v4().simple()
+        );
+        let community = rt
+            .block_on(state.db.ensure_configured_community(&host))
+            .expect("ensure community")
+            .id;
+
+        let store = |content: &str| {
+            let event = nostr::EventBuilder::new(nostr::Kind::Metadata, content)
+                .sign_with_keys(&Keys::generate())
+                .expect("sign profile");
+            rt.block_on(state.db.replace_addressable_event(community, &event, None))
+                .expect("store profile");
+            event
+        };
+        let named = store(r#"{"name":"wes","display_name":"Wes Anderson"}"#);
+        store(r#"{"name":"pollen","picture":"data:image/png;base64,P7+Wes+dYL"}"#);
+        store(r#"{"name":"pollen","about":"Wes' bestie","nip05":"wes@example.com"}"#);
+
+        let keys = Keys::generate();
+        let body = br#"{"query":"WES"}"#;
+        let url = format!("https://{host}{}", crate::api::profiles::SEARCH_PATH);
+        let headers = same_key_nip98_and_assertion_headers(&keys, &url, "POST", body);
+
+        let (status, _resp_headers, resp) = rt.block_on(oneshot_request_full(
+            state,
+            "POST",
+            crate::api::profiles::SEARCH_PATH,
+            &host,
+            headers,
+            body,
+        ));
+
+        assert_eq!(
+            status,
+            axum::http::StatusCode::OK,
+            "body: {:?}",
+            String::from_utf8_lossy(&resp)
+        );
+        let events: Vec<nostr::Event> =
+            serde_json::from_slice(&resp).expect("response is a JSON array of events");
+        assert_eq!(events, vec![named]);
+        assert!(
+            events[0].verify().is_ok(),
+            "returned event keeps its signature"
         );
     }
 
@@ -7707,6 +7999,7 @@ pub(crate) mod postgres_tests {
                     None,
                     author.public_key().to_bytes().as_slice(),
                     None,
+                    &[],
                 )
                 .await
                 .expect("create channel");
@@ -7945,6 +8238,7 @@ pub(crate) mod postgres_tests {
                 None,
                 author.public_key().to_bytes().as_slice(),
                 None,
+                &[],
             )
             .await
             .expect("create channel");
@@ -8396,7 +8690,9 @@ pub(crate) mod postgres_tests {
                 .await
                 .expect("local Postgres and Redis");
             // A schema whose `users` table can be taken away after the link,
-            // so only the owner-to-agent lookup fails at revoke time.
+            // so only the owner-to-agent lookup fails at revoke time. It
+            // carries `communities` and the deletion lock key so writes pass
+            // community write admission.
             let db_url = crate::test_support::database_url();
             let schema = format!("late_owner_{}", uuid::Uuid::new_v4().simple());
             sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
@@ -8405,7 +8701,10 @@ pub(crate) mod postgres_tests {
                  CREATE TABLE {schema}.community_bans (LIKE public.community_bans INCLUDING ALL); \
                  CREATE TABLE {schema}.relay_members (LIKE public.relay_members INCLUDING ALL); \
                  CREATE TABLE {schema}.join_policy_acceptances \
-                     (LIKE public.join_policy_acceptances INCLUDING ALL);"
+                     (LIKE public.join_policy_acceptances INCLUDING ALL); \
+                 CREATE TABLE {schema}.communities (LIKE public.communities INCLUDING ALL); \
+                 CREATE FUNCTION {schema}.community_deletion_lock_key(target UUID) RETURNS BIGINT \
+                 LANGUAGE SQL IMMUTABLE STRICT AS 'SELECT public.community_deletion_lock_key(target)';"
             )))
             .execute(state.db.pool())
             .await
@@ -8423,6 +8722,17 @@ pub(crate) mod postgres_tests {
 
             let tenant = fresh_tenant("late-owner.test");
             let other = fresh_tenant("late-owner-other.test");
+            // Both tenants pass community write admission in the schema.
+            for community in [&tenant, &other] {
+                sqlx::query(sqlx::AssertSqlSafe(format!(
+                    "INSERT INTO {schema}.communities (id, host) VALUES ($1, $2)"
+                )))
+                .bind(community.community().as_uuid())
+                .bind(community.host())
+                .execute(&admin)
+                .await
+                .expect("seed admitted community");
+            }
             let (owner, agent) = (Keys::generate(), Keys::generate());
             let agent_bytes = agent.public_key().to_bytes();
 

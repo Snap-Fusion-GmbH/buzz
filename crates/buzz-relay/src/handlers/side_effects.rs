@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use nostr::{Event, EventBuilder, Kind, Tag};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use buzz_core::kind::{
@@ -540,8 +540,31 @@ pub async fn validate_admin_event(
     event: &Event,
     state: &Arc<AppState>,
 ) -> anyhow::Result<()> {
-    // CREATE_GROUP doesn't need an existing channel — skip h-tag extraction
+    // CREATE_GROUP doesn't need an existing channel — skip h-tag extraction.
+    // Its initial members get the third-party add check a kind:9000 would.
     if kind == 9007 {
+        let members = initial_members(event)?;
+        // Ingest confirms a resend of a stored create without writing anything,
+        // so a policy changed since then must not refuse it.
+        if members.is_empty()
+            || state
+                .db
+                .get_event_by_id_for_event_write(tenant.community(), event.id.as_bytes())
+                .await?
+                .is_some()
+        {
+            return Ok(());
+        }
+        let actor_bytes = event.pubkey.to_bytes().to_vec();
+        for member in members {
+            if let Some((policy, owner)) = state
+                .db
+                .get_agent_channel_policy(tenant.community(), &member)
+                .await?
+            {
+                channel_authz::decide_channel_add_policy(&policy, owner.as_deref(), &actor_bytes)?;
+            }
+        }
         return Ok(());
     }
 
@@ -662,6 +685,7 @@ pub async fn validate_admin_event(
                 "purpose",
                 "visibility",
                 "ttl",
+                "t",
             ];
             let has_recognized = event
                 .tags
@@ -669,7 +693,7 @@ pub async fn validate_admin_event(
                 .any(|t| RECOGNIZED_TAGS.contains(&t.kind().to_string().as_str()));
             if !has_recognized {
                 return Err(anyhow::anyhow!(
-                    "kind:9002 must include at least one metadata tag (name, about, archived, topic, purpose, visibility, ttl)"
+                    "kind:9002 must include at least one metadata tag (name, about, archived, topic, purpose, visibility, ttl, t)"
                 ));
             }
 
@@ -748,11 +772,21 @@ pub async fn validate_admin_event(
                 }
             }
 
-            // name/about/archived/visibility/ttl require owner/admin;
+            // Validate label (`t`) values before storage.
+            if let Some(labels) = channel_labels_from_tags(event) {
+                labels.map_err(|e| anyhow::anyhow!("{e}"))?;
+            }
+
+            // name/about/archived/visibility/ttl/labels require owner/admin;
             // topic/purpose allow any member.
             let has_privileged_tag = event.tags.iter().any(|t| {
                 let k = t.kind().to_string();
-                k == "name" || k == "about" || k == "archived" || k == "visibility" || k == "ttl"
+                k == "name"
+                    || k == "about"
+                    || k == "archived"
+                    || k == "visibility"
+                    || k == "ttl"
+                    || k == "t"
             });
             if has_privileged_tag {
                 let members = state.db.get_members(tenant.community(), channel_id).await?;
@@ -774,7 +808,7 @@ pub async fn validate_admin_event(
                             return Ok(());
                         }
                         Err(anyhow::anyhow!(
-                            "actor not authorized for name/about/archived/visibility/ttl changes"
+                            "actor not authorized for name/about/archived/visibility/ttl/label changes"
                         ))
                     }
                 }
@@ -1025,7 +1059,8 @@ pub fn emit_live_thread_summary(
 
 /// Emit a relay-signed membership notification event stored globally (channel_id = None).
 ///
-/// kind:44100 = member added, kind:44101 = member removed.
+/// kind:44100 = member added, kind:44101 = member removed. System channels
+/// emit none.
 /// The p tag addresses the target pubkey; the h tag carries the channel UUID as metadata.
 /// Stored with channel_id = None so global subscribers receive it via slow-path fan-out.
 pub async fn emit_membership_notification(
@@ -1036,6 +1071,16 @@ pub async fn emit_membership_notification(
     actor_pubkey: &[u8],
     notification_kind: u32,
 ) -> anyhow::Result<()> {
+    // A system channel is left out of clients' channel lists, so it sends no
+    // membership notifications: a client that receives one would show it.
+    if !state
+        .db
+        .system_channel_ids_among(tenant.community(), &[channel_id])
+        .await?
+        .is_empty()
+    {
+        return Ok(());
+    }
     let target_hex = hex::encode(target_pubkey);
     let actor_hex = hex::encode(actor_pubkey);
     let channel_id_str = channel_id.to_string();
@@ -1165,9 +1210,28 @@ async fn emit_addressable_discovery_event(
     Ok(())
 }
 
-fn group_members_tags(group_id: &str, members: &[MemberRecord]) -> anyhow::Result<Vec<Tag>> {
-    let mut tags: Vec<Tag> = Vec::with_capacity(members.len() + 1);
+/// Tags that identify the channel on every relay-signed group-state event:
+/// the channel type `t` first, then one `t` per label, then the creator `P`.
+fn group_state_identity_tags(
+    identity: &buzz_db::channel::ChannelIdentity,
+) -> anyhow::Result<Vec<Tag>> {
+    Ok(buzz_core::channel::group_state_identity_tags(
+        &identity.channel_type,
+        &identity.labels,
+        &identity.created_by,
+    )?)
+}
+
+fn group_members_tags(
+    group_id: &str,
+    identity: Option<&buzz_db::channel::ChannelIdentity>,
+    members: &[MemberRecord],
+) -> anyhow::Result<Vec<Tag>> {
+    let mut tags: Vec<Tag> = Vec::with_capacity(members.len() + 3);
     tags.push(Tag::parse(["d", group_id])?);
+    if let Some(identity) = identity {
+        tags.extend(group_state_identity_tags(identity)?);
+    }
     for member in members {
         let pubkey_hex = hex::encode(&member.pubkey);
         // NIP-29 convention: ["p", pubkey, relay_url, role]. Empty relay_url
@@ -1182,7 +1246,11 @@ async fn store_group_members_event(
     member_snapshot: &mut buzz_db::channel::LockedMemberSnapshot,
 ) -> anyhow::Result<Option<buzz_core::StoredEvent>> {
     let group_id = member_snapshot.channel_id().to_string();
-    let tags = group_members_tags(&group_id, &member_snapshot.members)?;
+    let tags = group_members_tags(
+        &group_id,
+        member_snapshot.identity.as_ref(),
+        &member_snapshot.members,
+    )?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -1269,8 +1337,12 @@ pub async fn emit_group_discovery_events(
             // making channel visibility self-describing for clients.
             tags.push(Tag::parse(["public"])?);
         }
-        // NIP-29 hidden tag: hint to clients not to show DMs in public group lists.
-        // Not a security boundary — access control is handled by channel-scoped storage.
+        // NIP-29 hidden tag: hide metadata from non-members. Set for DMs and
+        // for private system channels. Not a security boundary — access
+        // control is handled by channel-scoped storage.
+        if channel.channel_type == "system" && channel.visibility == "private" {
+            tags.push(Tag::parse(["hidden"])?);
+        }
         if channel.channel_type == "dm" {
             tags.push(Tag::parse(["hidden"])?);
             // Include participant pubkeys in kind:39000 for DMs so clients can
@@ -1282,8 +1354,14 @@ pub async fn emit_group_discovery_events(
         }
         // Buzz channels always require explicit membership
         tags.push(Tag::parse(["closed"])?);
-        // Channel type tag so clients can distinguish stream/forum/dm without inference
-        tags.push(Tag::parse(["t", &channel.channel_type])?);
+        // Channel type tag so clients can distinguish stream/forum/dm without
+        // inference, then the creator. The same tags lead 39001 and 39002.
+        tags.extend(group_state_identity_tags(&channel.identity())?);
+        // Creation time, so readers can pick the oldest of two channels. The
+        // event's own created_at changes on every edit.
+        tags.push(buzz_core::channel::channel_created_at_tag(
+            channel.created_at.timestamp(),
+        )?);
         // Optional topic / purpose for richer client UX
         if let Some(ref topic) = channel.topic {
             if !topic.is_empty() {
@@ -1319,6 +1397,7 @@ pub async fn emit_group_discovery_events(
 
     {
         let mut tags: Vec<Tag> = vec![Tag::parse(["d", &group_id])?];
+        tags.extend(group_state_identity_tags(&channel.identity())?);
         for m in members
             .iter()
             .filter(|m| m.role == "owner" || m.role == "admin")
@@ -1847,11 +1926,55 @@ async fn handle_edit_metadata(
         }
     }
 
+    // All `t` tags together form the new label set, so they are applied
+    // once after the loop. `["t", ""]` alone clears the set.
+    if let Some(labels) = channel_labels_from_tags(event) {
+        let labels = labels.map_err(|e| anyhow::anyhow!("{e}"))?;
+        state
+            .db
+            .update_channel(
+                tenant.community(),
+                channel_id,
+                buzz_db::channel::ChannelUpdate {
+                    labels: Some(labels),
+                    ..Default::default()
+                },
+            )
+            .await?;
+    }
+
     if let Err(e) = emit_group_discovery_events(tenant, state, channel_id).await {
         warn!(channel = %channel_id, error = %e, "NIP-29 group discovery emission failed");
     }
 
     Ok(())
+}
+
+/// The channel label set named by an event's `["t", <label>]` tags, or
+/// `None` when the event has no `t` tag. kind:9007 uses it for the initial
+/// labels and kind:9002 for a replacement set. A `t` tag without a value is
+/// refused.
+pub(crate) fn channel_labels_from_tags(
+    event: &Event,
+) -> Option<Result<Vec<String>, buzz_core::channel::ChannelLabelError>> {
+    let mut values = Vec::new();
+    for tag in event.tags.iter() {
+        if tag.kind() == nostr::TagKind::t() {
+            match tag.content() {
+                Some(value) => values.push(value),
+                None => {
+                    return Some(Err(buzz_core::channel::ChannelLabelError::Invalid(
+                        String::new(),
+                    )))
+                }
+            }
+        }
+    }
+    if values.is_empty() {
+        None
+    } else {
+        Some(buzz_core::channel::parse_channel_labels(values))
+    }
 }
 
 async fn handle_delete_event_side_effect(
@@ -1961,21 +2084,26 @@ async fn handle_create_group(
 ) -> anyhow::Result<()> {
     let name =
         extract_tag_value(event, "name").ok_or_else(|| anyhow::anyhow!("missing name tag"))?;
-    let visibility_str =
-        extract_tag_value(event, "visibility").unwrap_or_else(|| "open".to_string());
     let channel_type_str =
         extract_tag_value(event, "channel_type").unwrap_or_else(|| "stream".to_string());
-
-    let visibility: buzz_db::channel::ChannelVisibility = visibility_str
-        .parse()
-        .map_err(|_| anyhow::anyhow!("invalid visibility: {visibility_str}"))?;
     let channel_type: buzz_db::channel::ChannelType = channel_type_str
         .parse()
         .map_err(|_| anyhow::anyhow!("invalid channel_type: {channel_type_str}"))?;
+    let visibility: buzz_db::channel::ChannelVisibility =
+        match extract_tag_value(event, "visibility") {
+            Some(visibility_str) => visibility_str
+                .parse()
+                .map_err(|_| anyhow::anyhow!("invalid visibility: {visibility_str}"))?,
+            None => channel_type.default_visibility(),
+        };
 
     let actor_bytes = event.pubkey.to_bytes().to_vec();
     let description = extract_tag_value(event, "about");
     let ttl_seconds = super::resolve_ttl(event, state.config.ephemeral_ttl_override);
+    let labels = channel_labels_from_tags(event)
+        .transpose()
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .unwrap_or_default();
 
     // If the event has an h-tag UUID, ingest_event() already created the channel
     // via create_channel_with_id(). Fetch it rather than creating a duplicate.
@@ -1988,19 +2116,20 @@ async fn handle_create_group(
     // inaccessible, so the counter correctly records a new creation. For the
     // no-h-tag path, ingest never creates the channel, so this is the sole
     // increment.
-    let channel = if let Some(client_uuid) = extract_h_tag_channel(event) {
+    // `members_added`: ingest's create also added the event's `p` tags.
+    let (channel, members_added) = if let Some(client_uuid) = extract_h_tag_channel(event) {
         match state
             .db
             .get_channel_for_event_write(tenant.community(), client_uuid)
             .await
         {
-            Ok(ch) => ch,
+            Ok(ch) => (ch, true),
             Err(_) => {
                 // Channel not found — shouldn't happen (ingest_event pre-created it),
                 // but fall back to creation to stay resilient.
                 let ch = state
                     .db
-                    .create_channel(
+                    .create_labeled_channel(
                         tenant.community(),
                         &name,
                         channel_type,
@@ -2008,6 +2137,7 @@ async fn handle_create_group(
                         description.as_deref(),
                         &actor_bytes,
                         ttl_seconds,
+                        &labels,
                     )
                     .await?;
                 metrics::counter!(
@@ -2016,13 +2146,13 @@ async fn handle_create_group(
                     "type" => channel_type.to_string()
                 )
                 .increment(1);
-                ch
+                (ch, false)
             }
         }
     } else {
         let ch = state
             .db
-            .create_channel(
+            .create_labeled_channel(
                 tenant.community(),
                 &name,
                 channel_type,
@@ -2030,6 +2160,7 @@ async fn handle_create_group(
                 description.as_deref(),
                 &actor_bytes,
                 ttl_seconds,
+                &labels,
             )
             .await?;
         metrics::counter!(
@@ -2038,13 +2169,13 @@ async fn handle_create_group(
             "type" => channel_type.to_string()
         )
         .increment(1);
-        ch
+        (ch, false)
     };
 
     // Creator becomes owner — evict any stale negative membership lookup.
     state.invalidate_membership(tenant, channel.id, &actor_bytes);
-    // Open channels appear in everyone's accessible set; private channels only
-    // affect the creator (the sole initial member).
+    // Open channels appear in everyone's accessible set; a private channel only
+    // affects its initial members, whose entries the invalidations here drop.
     if visibility == buzz_db::channel::ChannelVisibility::Open {
         state.invalidate_all_accessible_channels(tenant);
     }
@@ -2076,6 +2207,45 @@ async fn handle_create_group(
     .await
     {
         warn!(channel = %channel.id, error = %e, "membership notification emission failed");
+    }
+
+    // Ingest added these in the create's transaction; announce them as a
+    // kind:9000 would. A failed announcement for one member must not cost the
+    // rest theirs: a resend writes nothing, so nothing would retry them.
+    let members = if members_added {
+        initial_members(event)?
+    } else {
+        Vec::new()
+    };
+    for member in members {
+        state.invalidate_membership(tenant, channel.id, &member);
+        if let Err(e) = emit_system_message(
+            tenant,
+            state,
+            channel.id,
+            serde_json::json!({
+                "type": "member_joined",
+                "actor": actor_hex,
+                "target": hex::encode(&member),
+            }),
+            chrono::Utc::now(),
+        )
+        .await
+        {
+            error!(channel = %channel.id, error = %e, "member_joined system message failed");
+        }
+        if let Err(e) = emit_membership_notification(
+            tenant,
+            state,
+            channel.id,
+            &member,
+            &actor_bytes,
+            KIND_MEMBER_ADDED_NOTIFICATION,
+        )
+        .await
+        {
+            warn!(channel = %channel.id, error = %e, "membership notification emission failed");
+        }
     }
 
     info!(channel_id = %channel.id, name = %name, "NIP-29 CREATE_GROUP processed");
@@ -2544,6 +2714,38 @@ async fn handle_standard_deletion_event(
     }
 
     Ok(())
+}
+
+/// Most members a kind:9007 may add besides its creator.
+pub(crate) const MAX_INITIAL_MEMBERS: usize = 32;
+
+/// The members a kind:9007 adds besides its creator: its `p` tags, deduplicated.
+/// They need the client-chosen channel UUID (`h`), so a retry of the same
+/// create names the same channel.
+pub(crate) fn initial_members(event: &Event) -> anyhow::Result<Vec<Vec<u8>>> {
+    let creator = event.pubkey.to_bytes();
+    let mut members: Vec<Vec<u8>> = Vec::new();
+    for tag in event
+        .tags
+        .iter()
+        .filter(|tag| tag.kind().to_string() == "p")
+    {
+        let member = tag
+            .content()
+            .and_then(|value| hex::decode(value).ok())
+            .filter(|bytes| bytes.len() == 32)
+            .ok_or_else(|| anyhow::anyhow!("p tag must be a 32-byte hex pubkey"))?;
+        if member != creator && !members.contains(&member) {
+            members.push(member);
+        }
+    }
+    if members.len() > MAX_INITIAL_MEMBERS {
+        anyhow::bail!("a channel may start with at most {MAX_INITIAL_MEMBERS} members");
+    }
+    if !members.is_empty() && extract_h_tag_channel(event).is_none() {
+        anyhow::bail!("initial members need an h tag");
+    }
+    Ok(members)
 }
 
 /// Extract channel UUID from `h` tag (NIP-29 group ID).
@@ -3889,6 +4091,57 @@ pub async fn publish_nipia_unarchived(
 mod tests {
     use super::*;
 
+    fn create_with(creator: &nostr::Keys, tags: Vec<Vec<String>>) -> Event {
+        nostr::EventBuilder::new(nostr::Kind::Custom(9007), "")
+            .tags(
+                tags.into_iter()
+                    .map(|tag| nostr::Tag::parse(tag).expect("tag")),
+            )
+            .sign_with_keys(creator)
+            .expect("sign")
+    }
+
+    fn tag(name: &str, value: &str) -> Vec<String> {
+        vec![name.to_string(), value.to_string()]
+    }
+
+    #[test]
+    fn initial_members_dedupes_and_leaves_out_the_creator() {
+        let (creator, agent) = (nostr::Keys::generate(), nostr::Keys::generate());
+        let h = tag("h", &Uuid::new_v4().to_string());
+        let event = create_with(
+            &creator,
+            vec![
+                h,
+                tag("p", &agent.public_key().to_hex()),
+                tag("p", &agent.public_key().to_hex()),
+                tag("p", &creator.public_key().to_hex()),
+            ],
+        );
+        assert_eq!(
+            initial_members(&event).expect("members"),
+            vec![agent.public_key().to_bytes().to_vec()]
+        );
+    }
+
+    #[test]
+    fn initial_members_rejects_bad_pubkeys_too_many_members_and_no_h_tag() {
+        let creator = nostr::Keys::generate();
+        let h = tag("h", &Uuid::new_v4().to_string());
+        let bad = create_with(&creator, vec![h.clone(), tag("p", "not-hex")]);
+        assert!(initial_members(&bad).is_err());
+
+        let mut crowd = vec![h];
+        for _ in 0..=MAX_INITIAL_MEMBERS {
+            crowd.push(tag("p", &nostr::Keys::generate().public_key().to_hex()));
+        }
+        assert!(initial_members(&create_with(&creator, crowd)).is_err());
+
+        let member = nostr::Keys::generate().public_key().to_hex();
+        let headless = create_with(&creator, vec![tag("p", &member)]);
+        assert!(initial_members(&headless).is_err());
+    }
+
     #[test]
     fn nip43_progress_logs_every_interval_inside_the_startup_sweep_only() {
         use Nip43ReconciliationPurpose::{Bootstrap, Maintenance};
@@ -3991,8 +4244,20 @@ mod tests {
             })
             .collect();
 
-        let tags = group_members_tags(&channel_id.to_string(), &members).expect("build tags");
-        assert_eq!(tags.len(), 1_502, "d tag plus every member p tag");
+        let identity = buzz_db::channel::ChannelIdentity {
+            channel_type: "forum".to_string(),
+            labels: Vec::new(),
+            created_by: vec![0xab; 32],
+        };
+        let tags = group_members_tags(&channel_id.to_string(), Some(&identity), &members)
+            .expect("build tags");
+        assert_eq!(
+            tags.len(),
+            1_504,
+            "d, type and creator tags plus every member p tag"
+        );
+        assert_eq!(tags[1].as_slice(), ["t", "forum"]);
+        assert_eq!(tags[2].as_slice(), ["P".to_string(), "ab".repeat(32)]);
 
         let late_pubkey = hex::encode(&members[1_500].pubkey);
         assert!(tags.iter().any(|tag| {
