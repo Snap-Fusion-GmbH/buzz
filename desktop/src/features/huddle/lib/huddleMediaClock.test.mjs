@@ -105,7 +105,13 @@ test("video publication defaults to the background clock and closes it on stop",
   const stop = startScreenPublisher({
     capture: async () => {
       captures++;
-      return { content: "{}" };
+      return {
+        content: JSON.stringify({
+          type: "video",
+          share: { started_at: Date.now() },
+          frames: [{ timestamp: 0 }],
+        }),
+      };
     },
     publish: async () => publications++,
     fail: async (error) => assert.fail(error),

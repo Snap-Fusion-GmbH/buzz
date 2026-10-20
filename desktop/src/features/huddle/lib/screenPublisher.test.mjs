@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { startScreenPublisher } from "./screenPublisher.ts";
+import { PublishCanceledError } from "@/shared/api/relayEventPublisher";
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 function harness(overrides = {}) {
@@ -8,7 +9,7 @@ function harness(overrides = {}) {
   const timers = [];
   const errors = [];
   const stop = startScreenPublisher({
-    capture: async () => ({ id: "frame" }),
+    capture: async () => video("frame", 10_000),
     publish: async (event, current) => {
       if (current()) events.push(event);
     },
@@ -23,26 +24,32 @@ function harness(overrides = {}) {
       const index = timers.findIndex((entry) => entry.callback === timer);
       if (index >= 0) timers.splice(index, 1);
     },
+    now: () => 10_000,
     ...overrides,
   });
   return { events, timers, errors, stop };
 }
 
-test("only the next frame is scheduled after publication settles", async () => {
-  let resolvePublish;
+test("a bounded publication pipeline keeps capturing while acknowledgements are pending", async () => {
+  const pending = [];
   const h = harness({
     publish: () =>
       new Promise((resolve) => {
-        resolvePublish = resolve;
+        pending.push(resolve);
       }),
   });
   await flush();
+  assert.equal(h.timers.length, 1);
+  for (let index = 1; index < 4; index++) await next(h);
+  assert.equal(pending.length, 4, "only four publications may be in flight");
   assert.equal(h.timers.length, 0);
-  resolvePublish();
+  pending.shift()();
   await flush();
   assert.equal(h.timers.length, 1);
   assert.equal(h.timers[0].delay, 0);
   h.stop();
+  for (const resolve of pending) resolve();
+  await flush();
   assert.equal(h.timers.length, 0);
 });
 
@@ -215,4 +222,129 @@ test("long or unrelated rejections remain terminal", async () => {
     assert.deepEqual(h.timers, []);
     h.stop();
   }
+});
+
+test("quota retirement invalidates every waiting send and requests fresh native dependencies", async () => {
+  let now = 10_000;
+  const requests = [];
+  const pending = [];
+  let captureId = 0;
+  const h = harness({
+    now: () => now,
+    capture: async (refresh) => {
+      requests.push(refresh);
+      return video(`frame-${captureId++}`, now);
+    },
+    publish: (_event, current) =>
+      new Promise((resolve, reject) =>
+        pending.push({ resolve, reject, current }),
+      ),
+  });
+  await flush();
+  await next(h);
+  assert.equal(pending.length, 2);
+  pending[0].reject(new Error("rate-limited: quota exceeded; retry in 0s"));
+  await flush();
+  assert.equal(
+    pending[1].current(),
+    false,
+    "queued pre-cooldown pixels must not send",
+  );
+  pending[1].resolve();
+  await flush();
+  await next(h, (delay) => {
+    now += delay;
+  });
+  assert.equal(requests.at(-1), true);
+  assert.equal(h.errors.length, 0);
+  h.stop();
+  for (const item of pending) item.resolve();
+  await flush();
+  assert.equal(h.timers.length, 0);
+});
+
+test("a send held by the shared relay gate is age-fenced and recovers with an IDR request", async () => {
+  let now = 10_000;
+  let release;
+  const requests = [];
+  let publications = 0;
+  const h = harness({
+    now: () => now,
+    capture: async (refresh) => {
+      requests.push(refresh);
+      return video(`frame-${requests.length}`, now);
+    },
+    publish: async (_event, current) => {
+      publications++;
+      if (publications === 1) {
+        await new Promise((resolve) => {
+          release = resolve;
+        });
+        if (!current()) throw new PublishCanceledError();
+      }
+    },
+  });
+  await flush();
+  now += 600;
+  release();
+  await flush();
+  await next(h);
+  assert.equal(requests.at(-1), true);
+  assert.deepEqual(h.errors, []);
+  h.stop();
+});
+
+test("persistent stale native output has a terminal recovery budget", async () => {
+  const h = harness({
+    now: () => 20_000,
+    capture: async () => video("stale", 10_000),
+  });
+  await flush();
+  for (let index = 0; index < 7; index++) await next(h);
+  assert.equal(h.errors.length, 1);
+  assert.match(h.errors[0].message, /recover fresh frames/);
+  assert.equal(h.events.length, 0);
+  assert.equal(h.timers.length, 0);
+});
+
+test("ACK completion cannot start a second capture while a native read is pending", async () => {
+  let reads = 0;
+  let releaseCapture;
+  let releasePublish;
+  const h = harness({
+    capture: async () => {
+      reads++;
+      if (reads === 2)
+        await new Promise((resolve) => {
+          releaseCapture = resolve;
+        });
+      return video(`frame-${reads}`, 10_000);
+    },
+    publish: () =>
+      new Promise((resolve) => {
+        releasePublish = resolve;
+      }),
+  });
+  await flush();
+  await next(h);
+  releasePublish();
+  await flush();
+  assert.equal(reads, 2);
+  assert.equal(h.timers.length, 0);
+  h.stop();
+  releaseCapture();
+  await flush();
+  assert.equal(h.timers.length, 0);
+});
+
+test("a failed wake-up reaches the native error path instead of stranding capture", async () => {
+  const error = new Error("Media clock failed to schedule");
+  const h = harness({
+    schedule: () => {
+      throw error;
+    },
+  });
+  await flush();
+  assert.deepEqual(h.errors, [error]);
+  h.stop();
 });

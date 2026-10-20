@@ -7,10 +7,9 @@ mod portal;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use buzz_core_pkg::huddle_screen::{ScreenMessage, ScreenShare, VIDEO_FPS};
+use buzz_core_pkg::huddle_screen::{ScreenShare, VIDEO_FPS};
 use serde::Serialize;
 use tauri::{Manager, State};
-use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -183,11 +182,7 @@ pub async fn list_huddle_screen_sources(
     .map_err(|e| e.to_string())?
 }
 
-fn capture_video(
-    source: &Source,
-    capture: &ScreenCapture,
-    sender: mpsc::Sender<ScreenMessage>,
-) -> Result<(), String> {
+fn capture_video(source: &Source, capture: &ScreenCapture) -> Result<(), String> {
     let mut encoder = ScreenVideoEncoder::new(capture.share.clone())?;
     let epoch = Instant::now();
     let cadence = Duration::from_nanos(1_000_000_000 / u64::from(VIDEO_FPS));
@@ -201,6 +196,7 @@ fn capture_video(
             break;
         }
         let Some(frame) = source.frame()? else {
+            capture.flush_pending(&mut encoder)?;
             if last_frame.elapsed() > Duration::from_secs(5) {
                 return Err("Screen capture stopped producing video".into());
             }
@@ -208,17 +204,10 @@ fn capture_video(
             continue;
         };
         last_frame = Instant::now();
-        let timestamp = u64::try_from(epoch.elapsed().as_micros()).map_err(|e| e.to_string())?;
-        let batches = encoder.push(frame, timestamp)?;
+        let timestamp = capture.timestamp()?;
+        capture.encode(&mut encoder, frame, timestamp)?;
         if capture.cancel.is_cancelled() {
             break;
-        }
-        for batch in batches {
-            match sender.try_send(batch) {
-                Ok(()) => {}
-                Err(mpsc::error::TrySendError::Full(_)) => encoder.discontinuity(),
-                Err(mpsc::error::TrySendError::Closed(_)) => return Ok(()),
-            }
         }
         // No catch-up bursts after a slow capture or encode.
         next = std::cmp::max(next + cadence, Instant::now());
@@ -278,13 +267,7 @@ pub async fn start_huddle_screen_share(
         .map_err(|e| e.to_string())?,
         label: entry.label,
     };
-    let (sender, receiver) = mpsc::channel(2);
-    let capture = Arc::new(ScreenCapture {
-        share: share.clone(),
-        pubkey,
-        cancel: cancel.clone(),
-        receiver: Mutex::new(receiver),
-    });
+    let capture = Arc::new(ScreenCapture::new(share.clone(), pubkey, cancel.clone()));
     let committed = {
         let mut hs = state.huddle()?;
         if hs.is_current_huddle(&channel_id, lifetime)
@@ -308,7 +291,7 @@ pub async fn start_huddle_screen_share(
     tokio::spawn(async move {
         let worker_capture = Arc::clone(&capture);
         let result = tokio::task::spawn_blocking(move || {
-            let result = capture_video(&source, &worker_capture, sender);
+            let result = capture_video(&source, &worker_capture);
             (source, result)
         })
         .await;
@@ -362,8 +345,14 @@ pub fn stop_huddle_screen_share(
 #[tauri::command]
 pub async fn read_huddle_screen_video_chunk(
     session_id: String,
+    refresh_keyframe: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
-    super::video::read_video_chunk(session_id, &state, buzz_core_pkg::kind::KIND_HUDDLE_SCREEN)
-        .await
+    super::video::read_video_chunk(
+        session_id,
+        &state,
+        buzz_core_pkg::kind::KIND_HUDDLE_SCREEN,
+        refresh_keyframe.unwrap_or(false),
+    )
+    .await
 }

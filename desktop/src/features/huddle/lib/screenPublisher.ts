@@ -1,15 +1,37 @@
 import type { RelayEvent } from "@/shared/api/types";
+import { PublishCanceledError } from "@/shared/api/relayEventPublisher";
 import type { VideoBatch } from "./screenShare";
 import { HuddleMediaClock } from "./huddleMediaClock";
 
 type PublisherDependencies = {
-  capture: () => Promise<RelayEvent | null>;
+  capture: (refreshKeyframe: boolean) => Promise<RelayEvent | null>;
   publish: (event: RelayEvent, isCurrent: () => boolean) => Promise<unknown>;
   fail: (error: unknown) => Promise<void>;
   schedule?: (callback: () => void, delay: number) => unknown;
   unschedule?: (timer: unknown) => void;
   now?: () => number;
 };
+
+/** Bounded acknowledgement window; capture itself remains single-flight. */
+export const MAX_VIDEO_PUBLICATIONS = 4;
+const MAX_CAPTURE_AGE_MS = 500;
+const MAX_STALE_RECOVERIES = 8;
+
+function capturedAt(event: RelayEvent): number {
+  const batch = JSON.parse(event.content) as VideoBatch;
+  const timestamp = batch.frames?.at(-1)?.timestamp;
+  if (
+    batch.type !== "video" ||
+    !batch.share ||
+    !Number.isSafeInteger(batch.share.started_at) ||
+    batch.share.started_at <= 0 ||
+    timestamp === undefined ||
+    !Number.isSafeInteger(timestamp) ||
+    timestamp < 0
+  )
+    throw new Error("Video capture returned invalid video");
+  return batch.share.started_at + timestamp / 1000;
+}
 
 function quotaCooldown(error: unknown): number | null {
   if (!(error instanceof Error)) return null;
@@ -25,20 +47,38 @@ function quotaCooldown(error: unknown): number | null {
 export function startScreenPublisher(deps: PublisherDependencies): () => void {
   let disposed = false;
   let timer: unknown;
+  let timerAt = 0;
   let refusals = 0;
   let cooldownTotal = 0;
   let captureAfter = 0;
+  let cooldownUntil = 0;
+  let generation = 0;
+  let inFlight = 0;
+  let capturing = false;
+  let refreshKeyframe = false;
+  let staleRecoveries = 0;
   let clock: HuddleMediaClock | undefined;
   const now = deps.now ?? Date.now;
-  const isCurrent = () => !disposed;
-  const failed = async (error: unknown) => {
-    if (disposed) return;
-    disposed = true;
-    clock?.dispose();
-    await deps.fail(error);
-  };
   let schedule = deps.schedule;
   let unschedule = deps.unschedule;
+  const stop = () => {
+    disposed = true;
+    generation++;
+    try {
+      if (timer !== undefined) unschedule?.(timer);
+    } finally {
+      timer = undefined;
+      clock?.dispose();
+    }
+  };
+  const failed = async (error: unknown) => {
+    if (disposed) return;
+    try {
+      stop();
+    } finally {
+      await deps.fail(error);
+    }
+  };
   try {
     if (!schedule && !unschedule) {
       clock = new HuddleMediaClock((error) => {
@@ -52,68 +92,105 @@ export function startScreenPublisher(deps: PublisherDependencies): () => void {
       throw new Error("Huddle publication requires a cancellable clock");
   } catch (error) {
     void failed(error);
-    return () => {};
+    return stop;
   }
   const scheduleNext = schedule;
-  const cancelNext = unschedule;
-  async function tick() {
-    if (disposed) return;
+  const wake = () => {
+    if (disposed || capturing || inFlight >= MAX_VIDEO_PUBLICATIONS) return;
     try {
-      const event = await deps.capture();
-      if (disposed) return;
+      const deadline = Math.max(now(), cooldownUntil);
+      if (
+        timer !== undefined &&
+        timerAt >= cooldownUntil &&
+        timerAt <= deadline
+      )
+        return;
+      if (timer !== undefined) unschedule?.(timer);
+      timerAt = deadline;
+      timer = scheduleNext(
+        () => {
+          timer = undefined;
+          void tick();
+        },
+        Math.max(0, cooldownUntil - now()),
+      );
+    } catch (error) {
+      void failed(error);
+    }
+  };
+  const retirePackets = () => {
+    generation++;
+    refreshKeyframe = true;
+  };
+  const stale = async () => {
+    retirePackets();
+    if (++staleRecoveries >= MAX_STALE_RECOVERIES)
+      await failed(new Error("Video capture could not recover fresh frames"));
+  };
+  async function tick() {
+    if (disposed || capturing || inFlight >= MAX_VIDEO_PUBLICATIONS) return;
+    capturing = true;
+    const epoch = generation;
+    try {
+      const refresh = refreshKeyframe;
+      refreshKeyframe = false;
+      const event = await deps.capture(refresh);
+      if (disposed || epoch !== generation) return;
       if (event) {
-        // Native capture stays bounded during cooldown; do not replay its old queue.
-        if (captureAfter > 0) {
-          const batch = JSON.parse(event.content) as VideoBatch;
-          const timestamp = batch.frames.at(-1)?.timestamp;
-          if (
-            batch.type !== "video" ||
-            !batch.share ||
-            !Number.isSafeInteger(batch.share.started_at) ||
-            batch.share.started_at <= 0 ||
-            timestamp === undefined ||
-            !Number.isSafeInteger(timestamp) ||
-            timestamp < 0
-          )
-            throw new Error("Screen capture returned invalid video");
-          if (batch.share.started_at + timestamp / 1000 < captureAfter) {
-            timer = scheduleNext(() => void tick(), 0);
-            return;
-          }
-        }
-        try {
-          await deps.publish(event, isCurrent);
-        } catch (error) {
-          const delay = quotaCooldown(error);
-          if (
-            disposed ||
-            delay === null ||
-            refusals >= 6 ||
-            cooldownTotal + delay > 15_000
-          )
-            throw error;
-          refusals++;
-          cooldownTotal += delay;
-          captureAfter = now() + delay;
-          timer = scheduleNext(() => void tick(), delay);
+        const captured = capturedAt(event);
+        const fresh = () =>
+          captured >= captureAfter && now() - captured <= MAX_CAPTURE_AGE_MS;
+        if (!fresh()) {
+          await stale();
           return;
         }
-        refusals = 0;
-        cooldownTotal = 0;
-        captureAfter = 0;
+        const isCurrent = () => !disposed && epoch === generation && fresh();
+        inFlight++;
+        void Promise.resolve()
+          .then(() => deps.publish(event, isCurrent))
+          .then(
+            () => {
+              if (disposed || epoch !== generation) return;
+              refusals = 0;
+              cooldownTotal = 0;
+              captureAfter = 0;
+              staleRecoveries = 0;
+            },
+            async (error: unknown) => {
+              if (disposed) return;
+              if (error instanceof PublishCanceledError && !isCurrent()) {
+                if (epoch === generation) await stale();
+                return;
+              }
+              const delay = quotaCooldown(error);
+              if (delay !== null && epoch !== generation) return;
+              if (
+                delay === null ||
+                refusals >= 6 ||
+                cooldownTotal + delay > 15_000
+              ) {
+                await failed(error);
+                return;
+              }
+              refusals++;
+              cooldownTotal += delay;
+              cooldownUntil = now() + delay;
+              captureAfter = cooldownUntil;
+              retirePackets();
+            },
+          )
+          .finally(() => {
+            inFlight--;
+            wake();
+          });
       }
-      if (!disposed) timer = scheduleNext(() => void tick(), 0);
     } catch (error) {
       await failed(error);
+    } finally {
+      capturing = false;
+      wake();
     }
   }
   void tick();
-  return () => {
-    disposed = true;
-    try {
-      if (timer !== undefined) cancelNext(timer);
-    } finally {
-      clock?.dispose();
-    }
-  };
+  return stop;
 }
