@@ -1,17 +1,15 @@
 //! Opt-in browser camera frames encoded natively, without image uploads.
 
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use buzz_core_pkg::huddle_screen::{
-    HuddleVideoMessage, VideoShare, MAX_CAMERA_HEIGHT, MAX_CAMERA_WIDTH,
-};
+use buzz_core_pkg::huddle_screen::{VideoShare, MAX_CAMERA_HEIGHT, MAX_CAMERA_WIDTH};
 use image::RgbaImage;
 use tauri::{
     ipc::{InvokeBody, Request},
     State,
 };
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -23,8 +21,6 @@ use crate::app_state::AppState;
 pub struct CameraCapture {
     pub(super) video: Arc<VideoCapture>,
     encoder: Arc<Mutex<ScreenVideoEncoder>>,
-    sender: mpsc::Sender<HuddleVideoMessage>,
-    epoch: Instant,
 }
 
 impl std::fmt::Debug for CameraCapture {
@@ -39,6 +35,14 @@ impl CameraCapture {
     /// Cancel pending delivery before a huddle or identity is replaced.
     pub fn cancel(&self) {
         self.video.cancel();
+    }
+
+    /// Flush sparse video without allowing the reader to queue another encode.
+    pub(super) fn flush_pending(&self) -> Result<(), String> {
+        if let Ok(mut encoder) = self.encoder.try_lock() {
+            self.video.flush_pending(&mut encoder)?;
+        }
+        Ok(())
     }
 }
 
@@ -79,17 +83,13 @@ pub async fn start_huddle_camera(
     let encoder = tokio::task::spawn_blocking(move || ScreenVideoEncoder::camera(encoder_share))
         .await
         .map_err(|e| e.to_string())??;
-    let (sender, receiver) = mpsc::channel(2);
     let camera = Arc::new(CameraCapture {
-        video: Arc::new(VideoCapture {
-            share: share.clone(),
+        video: Arc::new(VideoCapture::new(
+            share.clone(),
             pubkey,
-            cancel: CancellationToken::new(),
-            receiver: Mutex::new(receiver),
-        }),
+            CancellationToken::new(),
+        )),
         encoder: Arc::new(Mutex::new(encoder)),
-        sender,
-        epoch: Instant::now(),
     });
     {
         let mut hs = state.huddle()?;
@@ -174,22 +174,12 @@ pub async fn push_huddle_camera_frame(
         return Err("Camera frames require a raw byte body".into());
     };
     let image = frame_image(width, height, bytes)?;
-    let timestamp = u64::try_from(camera.epoch.elapsed().as_micros()).map_err(|e| e.to_string())?;
+    let timestamp = camera.video.timestamp()?;
     tokio::task::spawn_blocking(move || {
         if camera.video.cancel.is_cancelled() {
             return Ok(false);
         }
-        let batches = encoder.push(image, timestamp)?;
-        for batch in batches {
-            if camera.video.cancel.is_cancelled() {
-                return Ok(false);
-            }
-            match camera.sender.try_send(batch) {
-                Ok(()) => {}
-                Err(mpsc::error::TrySendError::Full(_)) => encoder.discontinuity(),
-                Err(mpsc::error::TrySendError::Closed(_)) => return Ok(false),
-            }
-        }
+        camera.video.encode(&mut encoder, image, timestamp)?;
         Ok(true)
     })
     .await
@@ -220,10 +210,16 @@ pub fn stop_huddle_camera(
 #[tauri::command]
 pub async fn read_huddle_camera_video_chunk(
     session_id: String,
+    refresh_keyframe: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
-    super::video::read_video_chunk(session_id, &state, buzz_core_pkg::kind::KIND_HUDDLE_CAMERA)
-        .await
+    super::video::read_video_chunk(
+        session_id,
+        &state,
+        buzz_core_pkg::kind::KIND_HUDDLE_CAMERA,
+        refresh_keyframe.unwrap_or(false),
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -231,6 +227,7 @@ mod tests {
     use super::*;
     use crate::app_state::build_app_state;
     use crate::huddle::{video::read_video_chunk, HuddlePhase};
+    use buzz_core_pkg::huddle_screen::HuddleVideoMessage;
     use nostr::{JsonUtil, Kind};
     use std::time::Duration;
 
@@ -241,19 +238,15 @@ mod tests {
             started_at: nostr::Timestamp::now().as_secs() * 1000,
             label: "Camera test".into(),
         };
-        let (sender, receiver) = mpsc::channel(2);
         let capture = Arc::new(CameraCapture {
-            video: Arc::new(VideoCapture {
-                share: share.clone(),
-                pubkey: state.keys.lock().unwrap().public_key(),
-                cancel: CancellationToken::new(),
-                receiver: Mutex::new(receiver),
-            }),
+            video: Arc::new(VideoCapture::new(
+                share.clone(),
+                state.keys.lock().unwrap().public_key(),
+                CancellationToken::new(),
+            )),
             encoder: Arc::new(Mutex::new(
                 ScreenVideoEncoder::camera(share.clone()).unwrap(),
             )),
-            sender,
-            epoch: Instant::now(),
         });
         {
             let mut huddle = state.huddle().unwrap();
@@ -278,29 +271,39 @@ mod tests {
     async fn a_retired_session_or_other_track_cannot_drain_the_current_camera() {
         let (state, capture) = camera();
         capture
-            .sender
-            .send(HuddleVideoMessage::Stopped {
-                share: capture.video.share.clone(),
-            })
-            .await
+            .video
+            .enqueue(
+                HuddleVideoMessage::Stopped {
+                    share: capture.video.share.clone(),
+                },
+                0,
+            )
             .unwrap();
         let kind = buzz_core_pkg::kind::KIND_HUDDLE_CAMERA;
-        assert!(read_video_chunk(Uuid::new_v4().to_string(), &state, kind)
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            read_video_chunk(Uuid::new_v4().to_string(), &state, kind, true)
+                .await
+                .unwrap()
+                .is_none()
+        );
         assert!(read_video_chunk(
             capture.video.share.session_id.to_string(),
             &state,
             buzz_core_pkg::kind::KIND_HUDDLE_SCREEN,
+            true,
         )
         .await
         .unwrap()
         .is_none());
-        let signed = read_video_chunk(capture.video.share.session_id.to_string(), &state, kind)
-            .await
-            .unwrap()
-            .unwrap();
+        let signed = read_video_chunk(
+            capture.video.share.session_id.to_string(),
+            &state,
+            kind,
+            false,
+        )
+        .await
+        .unwrap()
+        .unwrap();
         let event = nostr::Event::from_json(signed).unwrap();
         assert_eq!(event.pubkey, capture.video.pubkey);
         assert_eq!(event.kind, Kind::Custom(kind as u16));
@@ -327,6 +330,7 @@ mod tests {
                 session,
                 &reader_state,
                 buzz_core_pkg::kind::KIND_HUDDLE_CAMERA,
+                false,
             )
             .await
         });
@@ -345,5 +349,106 @@ mod tests {
             .unwrap()
             .unwrap()
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn the_production_reader_releases_sparse_camera_frames_without_another_push() {
+        let (state, capture) = camera();
+        let video = &capture.video;
+        let timestamp = video.timestamp().unwrap();
+        {
+            let mut encoder = capture.encoder.lock().await;
+            video
+                .encode(&mut encoder, RgbaImage::new(320, 180), timestamp)
+                .unwrap();
+        }
+        read_video_chunk(
+            video.share.session_id.to_string(),
+            &state,
+            buzz_core_pkg::kind::KIND_HUDDLE_CAMERA,
+            false,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(35)).await;
+        {
+            let mut encoder = capture.encoder.lock().await;
+            video
+                .encode(
+                    &mut encoder,
+                    RgbaImage::new(320, 180),
+                    video.timestamp().unwrap(),
+                )
+                .unwrap();
+        }
+        tokio::time::sleep(Duration::from_millis(260)).await;
+        let result = read_video_chunk(
+            video.share.session_id.to_string(),
+            &state,
+            buzz_core_pkg::kind::KIND_HUDDLE_CAMERA,
+            false,
+        )
+        .await
+        .unwrap()
+        .expect("pending video must flush without waiting for eight source frames");
+        let event = nostr::Event::from_json(result).unwrap();
+        let message: HuddleVideoMessage = serde_json::from_str(&event.content).unwrap();
+        let HuddleVideoMessage::Video { frames, .. } = message else {
+            panic!("expected video");
+        };
+        assert_eq!(frames.len(), 1);
+        assert!(!frames[0].key);
+    }
+
+    #[tokio::test]
+    async fn stale_queued_camera_pixels_cannot_be_signed_as_fresh_events() {
+        let (state, capture) = camera();
+        {
+            let mut encoder = capture.encoder.lock().await;
+            capture
+                .video
+                .encode(&mut encoder, RgbaImage::new(320, 180), 0)
+                .unwrap();
+        }
+        tokio::time::sleep(Duration::from_millis(520)).await;
+        let result = read_video_chunk(
+            capture.video.share.session_id.to_string(),
+            &state,
+            buzz_core_pkg::kind::KIND_HUDDLE_CAMERA,
+            false,
+        )
+        .await
+        .unwrap();
+        assert!(
+            result.is_none(),
+            "a fresh signature must not hide old pixels"
+        );
+        {
+            let mut encoder = capture.encoder.lock().await;
+            capture
+                .video
+                .encode(
+                    &mut encoder,
+                    RgbaImage::new(320, 180),
+                    capture.video.timestamp().unwrap(),
+                )
+                .unwrap();
+        }
+        let result = read_video_chunk(
+            capture.video.share.session_id.to_string(),
+            &state,
+            buzz_core_pkg::kind::KIND_HUDDLE_CAMERA,
+            false,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let event = nostr::Event::from_json(result).unwrap();
+        let message: HuddleVideoMessage = serde_json::from_str(&event.content).unwrap();
+        let HuddleVideoMessage::Video { frames, .. } = message else {
+            panic!("expected video");
+        };
+        assert!(frames[0].key, "stale retirement must recover dependencies");
     }
 }

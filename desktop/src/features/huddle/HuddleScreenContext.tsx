@@ -171,10 +171,10 @@ export function HuddleScreenProvider({
     const isCurrent = () =>
       current && localShareRef.current?.session_id === sessionId;
     const stop = startScreenPublisher({
-      capture: async () => {
+      capture: async (refreshKeyframe) => {
         const json = await invoke<string | null>(
           "read_huddle_screen_video_chunk",
-          { sessionId },
+          { sessionId, refreshKeyframe },
         );
         if (!json && isCurrent()) {
           const state = await invoke<ScreenState>("get_huddle_state");

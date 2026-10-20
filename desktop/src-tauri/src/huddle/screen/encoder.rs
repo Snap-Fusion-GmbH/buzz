@@ -16,6 +16,8 @@ use openh264::{
 };
 
 const MAX_DOWNSCALE_STEPS: u8 = 4;
+/// Bound sparse batches while keeping two 30 FPS tracks within the WS flood budget.
+pub(super) const MAX_BATCH_AGE_US: u64 = 240_000;
 
 /// Stateful inter-frame encoder; never creates JPEG snapshots.
 pub struct ScreenVideoEncoder {
@@ -28,6 +30,9 @@ pub struct ScreenVideoEncoder {
     bytes: usize,
     sequence: u64,
     share: ScreenShare,
+    bootstrap: bool,
+    last_keyframe_timestamp: Option<u64>,
+    capture_generation: u64,
 }
 
 impl ScreenVideoEncoder {
@@ -83,6 +88,9 @@ impl ScreenVideoEncoder {
             bytes: 0,
             sequence: 0,
             share,
+            bootstrap: true,
+            last_keyframe_timestamp: None,
+            capture_generation: 0,
         })
     }
 
@@ -91,6 +99,15 @@ impl ScreenVideoEncoder {
         self.frames.clear();
         self.bytes = 0;
         self.encoder.force_intra_frame();
+        self.bootstrap = true;
+    }
+
+    /// A queue retirement invalidates every pending inter-frame dependency.
+    pub fn begin_generation(&mut self, generation: u64) {
+        if self.capture_generation != generation {
+            self.capture_generation = generation;
+            self.discontinuity();
+        }
     }
 
     /// Encode a captured RGBA frame at its actual monotonic capture timestamp.
@@ -114,7 +131,7 @@ impl ScreenVideoEncoder {
             } else {
                 image
             };
-        let mut emitted = Vec::new();
+        let mut emitted: Vec<_> = self.flush_due(timestamp).into_iter().collect();
         for _ in 0..=MAX_DOWNSCALE_STEPS {
             let width = scaled.width() & !1;
             let height = scaled.height() & !1;
@@ -132,9 +149,16 @@ impl ScreenVideoEncoder {
                 }
                 self.dimensions = (width, height);
                 self.encoder.force_intra_frame();
+                self.bootstrap = true;
             }
             let source = RgbaSliceU8::new(scaled.as_raw(), (width as usize, height as usize));
             let yuv = YUVBuffer::from_rgba8_source(source);
+            if self
+                .last_keyframe_timestamp
+                .is_some_and(|last| timestamp.saturating_sub(last) >= 1_000_000)
+            {
+                self.encoder.force_intra_frame();
+            }
             let encoded = self
                 .encoder
                 .encode_at(&yuv, openh264::Timestamp::from_millis(timestamp / 1000))
@@ -148,6 +172,9 @@ impl ScreenVideoEncoder {
                 return Ok(emitted);
             }
             let key = encoded.frame_type() == FrameType::IDR;
+            if key {
+                self.last_keyframe_timestamp = Some(timestamp);
+            }
             let data = encoded.to_vec();
             if data.len() > MAX_VIDEO_BYTES {
                 if self.downscale_steps >= MAX_DOWNSCALE_STEPS {
@@ -183,7 +210,8 @@ impl ScreenVideoEncoder {
                 key,
                 data: STANDARD.encode(data),
             });
-            if self.frames.len() >= MAX_BATCH_FRAMES {
+            if (self.bootstrap && key) || self.frames.len() >= MAX_BATCH_FRAMES {
+                self.bootstrap = false;
                 if let Some(batch) = self.flush() {
                     emitted.push(batch);
                 }
@@ -191,6 +219,19 @@ impl ScreenVideoEncoder {
             return Ok(emitted);
         }
         Err("Video resolution adjustment exhausted its retry limit".into())
+    }
+
+    /// Release a partial batch on its deadline, even without another camera frame.
+    pub fn flush_due(&mut self, timestamp: u64) -> Option<ScreenMessage> {
+        if self
+            .frames
+            .first()
+            .is_some_and(|frame| timestamp.saturating_sub(frame.timestamp) >= MAX_BATCH_AGE_US)
+        {
+            self.flush()
+        } else {
+            None
+        }
     }
 
     /// Flush a transport batch without changing the video capture cadence.
@@ -226,6 +267,105 @@ mod tests {
     }
 
     #[test]
+    fn camera_publishes_its_bootstrap_keyframe_without_waiting_for_eight_frames() {
+        let mut encoder = ScreenVideoEncoder::camera(ScreenShare {
+            session_id: uuid::Uuid::new_v4(),
+            started_at: nostr::Timestamp::now().as_secs() * 1000,
+            label: "Camera latency regression".into(),
+        })
+        .unwrap();
+        let packets = encoder.push(RgbaImage::new(320, 180), 0).unwrap();
+        assert_eq!(
+            packets.len(),
+            1,
+            "camera startup must not wait for a full batch"
+        );
+        let ScreenMessage::Video { frames, .. } = &packets[0] else {
+            panic!("expected video");
+        };
+        assert_eq!(frames.len(), 1);
+        assert!(frames[0].key);
+    }
+
+    #[test]
+    fn partial_batches_have_a_deadline_even_when_capture_has_no_next_frame() {
+        let mut encoder = encoder();
+        assert_eq!(encoder.push(RgbaImage::new(320, 180), 0).unwrap().len(), 1);
+        assert!(encoder
+            .push(RgbaImage::new(320, 180), 66_666)
+            .unwrap()
+            .is_empty());
+        assert!(encoder.flush_due(66_666 + MAX_BATCH_AGE_US - 1).is_none());
+        let Some(ScreenMessage::Video { frames, .. }) =
+            encoder.flush_due(66_666 + MAX_BATCH_AGE_US)
+        else {
+            panic!("sparse capture must release its pending frame at the deadline");
+        };
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].timestamp, 66_666);
+    }
+
+    #[test]
+    fn slow_camera_capture_does_not_stretch_keyframe_recovery_to_several_seconds() {
+        let mut encoder = ScreenVideoEncoder::camera(encoder().share).unwrap();
+        let mut keys = Vec::new();
+        for index in 0..25_u64 {
+            for packet in encoder
+                .push(RgbaImage::new(320, 180), index * 100_000)
+                .unwrap()
+            {
+                if let ScreenMessage::Video { frames, .. } = packet {
+                    keys.extend(frames.into_iter().filter(|frame| frame.key));
+                }
+            }
+        }
+        if let Some(ScreenMessage::Video { frames, .. }) = encoder.flush() {
+            keys.extend(frames.into_iter().filter(|frame| frame.key));
+        }
+        assert!(keys.len() >= 3);
+        for pair in keys.windows(2) {
+            assert!(pair[1].timestamp - pair[0].timestamp <= 1_100_000);
+        }
+    }
+
+    #[test]
+    fn two_30fps_tracks_fit_the_existing_relay_packet_budget() {
+        for camera in [false, true] {
+            let mut encoder = if camera {
+                ScreenVideoEncoder::camera(encoder().share).unwrap()
+            } else {
+                encoder()
+            };
+            let mut packets = 0;
+            let mut frames = 0;
+            for index in 0..150_u64 {
+                for batch in encoder
+                    .push(
+                        RgbaImage::from_pixel(320, 180, image::Rgba([index as u8, 40, 90, 255])),
+                        index * 1_000_000 / 30,
+                    )
+                    .unwrap()
+                {
+                    let ScreenMessage::Video { frames: batch, .. } = batch else {
+                        panic!("expected video");
+                    };
+                    frames += batch.len();
+                    packets += 1;
+                }
+            }
+            if let Some(ScreenMessage::Video { frames: batch, .. }) = encoder.flush() {
+                frames += batch.len();
+                packets += 1;
+            }
+            assert_eq!(frames, 150, "packet limits must not reduce capture FPS");
+            assert!(
+                packets <= 21,
+                "two tracks need room under 50 WS operations/5s"
+            );
+        }
+    }
+
+    #[test]
     fn tiny_sources_are_rejected_before_the_native_encoder_is_called() {
         let mut encoder = encoder();
         for (width, height) in [(2, 2), (8, 8), (14, 100), (100, 14), (3840, 16)] {
@@ -238,8 +378,13 @@ mod tests {
             assert!(!error.contains("Native:5"), "{error}");
         }
         assert!(encoder.flush().is_none());
-        encoder.push(RgbaImage::new(320, 180), 33_333).unwrap();
-        assert!(encoder.flush().is_some());
+        assert_eq!(
+            encoder
+                .push(RgbaImage::new(320, 180), 33_333)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -260,7 +405,7 @@ mod tests {
             batches.extend(encoder.push(image, index as u64 * 33_333).unwrap());
             assert_eq!(encoder.dimensions, encoded_size);
         }
-        batches.push(encoder.flush().unwrap());
+        batches.extend(encoder.flush());
         assert_eq!(batches.len(), 5);
         for batch in batches {
             let ScreenMessage::Video {

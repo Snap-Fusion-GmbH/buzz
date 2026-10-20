@@ -35,11 +35,40 @@ implement mobile camera publishing or viewing.
 - Session-owned worker clocks avoid background window-timer throttling.
   Stop, source failure, leave/end, signer changes, and community changes retire
   browser tracks, workers, queued frames, and native reservations.
+- Native huddle companions match the main window's disabled background-throttling
+  policy, so supported macOS webviews do not suspend live room media when hidden.
 - Viewers expire disconnected streams and release decoder resources. Explicit
   stop is scoped to its consent identity; an old stop cannot remove a replacement.
 
 The feature keeps the existing relay-only architecture: no external SFU,
 peer-to-peer mesh, image uploads, or additional HTTP API.
+
+## Live Latency
+
+Camera and screen use the same bounded live-video path. Bootstrap and recovery
+keyframes are released immediately; partial batches flush after 240 ms, even
+when the camera stops delivering new frames. After one second without a keyframe,
+the next captured frame requests one, so recovery does not depend solely on
+reaching a fixed frame count with a low-FPS camera.
+
+The two-batch native queue discards stale dependencies on overflow instead of
+preserving old pixels. Queued frames older than 500 ms are retired before
+signing. Queue generations also fence signing completion. The publisher keeps
+at most four acknowledgements outstanding, with one native read at a time, and
+checks capture age again immediately before sending. Dropped or refused packets
+request a new keyframe without reacquiring the camera. Repeated recovery
+failures remain bounded and visible.
+
+Playback targets 300 ms behind the buffered live edge and catches up when that
+gap exceeds 450 ms. Small steady-state drift uses bounded 1.25x video-only
+playback rather than repeated native decoder seeks. Startup, visibility changes,
+and backlogs over a second seek directly toward live playback. Checks run on media
+progress, actual frame presentation, and window visibility changes. This avoids
+replaying an entire cached keyframe
+chain when a tile mounts or a window resumes. These are local queue/playout
+bounds, not a guarantee about device or network latency. Capture still targets
+30 FPS, with normal combined camera/screen packet cadence below the relay's
+default WebSocket flood limit.
 
 ## Platform Compatibility
 
@@ -83,6 +112,19 @@ workaround or claim unpatched affected runtimes work.
   IPC and relay transport; they do not establish OS permissions.
 - Native OpenH264 tests encode, validate, and decode moving camera frames with
   inter-frame compression and periodic keyframes.
+- October 19, 2026 latency verification used generated 720p clocks, production
+  capture/IPC/encoding/signing and native companion playback, with controlled
+  local transport and 450 ms delayed acknowledgements. Linux measured 346 ms
+  median / 464 ms p95 at 26 FPS. Two unlocked Mac Mini runs measured 875-934 ms
+  median with the old player and 404-443 ms median / 465-474 ms p95 with the fixed
+  player at 23-26 FPS. Both passed rewind recovery and camera cleanup. These
+  runs do not establish physical-device or live-network latency.
+- Latency regressions bind the production player, publisher, encoder, and signed
+  reader: warm-history catch-up, seek errors with explicit retry, listener
+  cleanup, delayed acknowledgements, quota and age retirement, sparse capture,
+  congestion recovery IDRs, signing races, and two-track packet cadence.
+  `huddle-video-latency.spec.ts` checks actual decoded frame presentations for
+  both camera and screen; its native IPC and relay transport are mocked.
 - Linux native synthetic video exercised binary IPC, native encoding, a local
   relay, and a second native viewer. Physical Linux capture was also exercised,
   including a hidden owner, with the dependency workaround noted above.
@@ -93,10 +135,10 @@ workaround or claim unpatched affected runtimes work.
   local transport: a minute-long run averaged 25.5 presented FPS, followed by
   stop/restart, retired-session fences, and simulated-disconnection cleanup.
   FPS used presented-frame callbacks because decoder statistics could be stale.
-- The human subsequently confirmed live Linux-camera video displayed on the
-  Mac after both clients were upgraded. That confirmation preceded the final
-  demand-driven discovery cleanup; the updated picker-refresh flow still needs
-  human confirmation.
+- The human confirmed live Linux-camera video displayed on the Mac after both
+  clients were upgraded. On October 16, 2026, the human also tested the final
+  owner-mediated companion picker in the installed Linux build and confirmed
+  selection of the monitor webcam works.
 
 Mac camera hardware/permissions, physical LED release, Windows capture, and
 minimized-window behavior still need platform checks. Generated canvas streams
@@ -122,3 +164,7 @@ do not establish physical-camera behavior while minimized.
 7. Close the companion and minimize the owner separately. Verify sustained
    playback on a second client, then confirm stop releases the actual device.
 8. Query kind `24812` after sharing ends. No camera frames should be returned.
+9. Wave or show a running clock while watching both self-preview and a second
+   client for at least a minute. Reopen the companion and restore a hidden
+   viewer. Video should stay near live rather than replaying a growing backlog.
+   Repeat while sharing a screen and confirm audio remains usable.

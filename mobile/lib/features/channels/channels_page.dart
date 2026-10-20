@@ -1,5 +1,6 @@
 import 'channel_unread.dart';
 import '../../shared/widgets/collapsible_section_body.dart';
+import '../../shared/widgets/compose_morph_icon.dart';
 import '../../shared/me/me_sync.dart';
 import 'dart:async';
 import 'dart:io';
@@ -8,6 +9,7 @@ import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:flutter/physics.dart';
@@ -27,11 +29,13 @@ import '../../shared/theme/theme.dart';
 import '../../shared/widgets/avatar_image.dart';
 import '../../shared/widgets/anchored_popover_menu.dart';
 import '../../shared/widgets/bee_refresh_indicator.dart';
+import '../../shared/widgets/bottom_up_page_route.dart';
 import '../../shared/widgets/buzz_loading_indicator.dart';
 import '../../shared/widgets/concentric_sheet_surface.dart';
 import '../../shared/widgets/frosted_app_bar.dart';
 import '../../shared/widgets/ios_navigation_bar.dart';
 import '../../shared/widgets/frosted_scaffold.dart';
+import '../../shared/widgets/mobile_tab_footer_backdrop.dart';
 import '../../shared/widgets/modal_presentation.dart';
 import '../../shared/widgets/confirmation_dialog.dart';
 import '../../shared/widgets/skeleton.dart';
@@ -40,7 +44,7 @@ import '../profile/profile_provider.dart';
 import '../profile/presence_cache_provider.dart';
 import '../../shared/identity_names/identity_names_provider.dart';
 import '../../shared/profile/user_cache_provider.dart';
-import '../pairing/pairing_page.dart';
+import '../../onboarding_app_entry.dart';
 import '../pairing/pairing_provider.dart';
 import 'channel.dart';
 import 'channel_actions_sheet.dart';
@@ -105,6 +109,8 @@ class ChannelsPage extends HookConsumerWidget {
   const ChannelsPage({
     required this.settingsPageBuilder,
     this.onSearch,
+    this.onInbox,
+    this.hasUnreadInbox = false,
     this.communityInvitePageBuilder,
     this.communityAppearancePageBuilder,
     required this.onSettingsTransitionProgress,
@@ -116,6 +122,12 @@ class ChannelsPage extends HookConsumerWidget {
 
   /// Opens global search from the header.
   final VoidCallback? onSearch;
+
+  /// Opens the conversation inbox from the header.
+  final VoidCallback? onInbox;
+
+  /// Whether the inbox contains unread conversations.
+  final bool hasUnreadInbox;
 
   /// Builds the invite destination opened from the community sheet.
   final WidgetBuilder? communityInvitePageBuilder;
@@ -151,7 +163,7 @@ class ChannelsPage extends HookConsumerWidget {
       context,
       titleStyle: headerTitleStyle,
       bottomHeight: _kTopSectionBottomPadding,
-      nativeLargeTitle: true,
+      nativeLargeTitle: false,
     );
     final communityAvatarKey = useMemoized(GlobalKey.new);
     final nativeCommunityAvatarBounds = useRef<Rect?>(null);
@@ -338,7 +350,7 @@ class ChannelsPage extends HookConsumerWidget {
             opaque: false,
             transitionDuration: Duration.zero,
             reverseTransitionDuration: Duration.zero,
-            pageBuilder: (_, _, _) => _CommunitySwitcherPage(
+            pageBuilder: (_, _, _) => CommunitySwitcherPage(
               arrivingCommunity: arrivingCommunity,
               destination: measureCommunityAvatar(),
               prepareLanding: prepareCommunityLanding,
@@ -369,7 +381,7 @@ class ChannelsPage extends HookConsumerWidget {
       late final _CommunitySwitcherRoute route;
       route = _CommunitySwitcherRoute(
         onTransitionProgress: onSettingsTransitionProgress,
-        builder: (_) => _CommunitySwitcherPage(
+        builder: (_) => CommunitySwitcherPage(
           destination: destination,
           prepareLanding: prepareCommunityLanding,
           onFlightChanged: (flying) {
@@ -383,6 +395,25 @@ class ChannelsPage extends HookConsumerWidget {
         if (context.mounted) communityFlightActive.value = false;
       });
     }
+
+    final showImportedCommunities = ref.watch(communityGridLandingProvider);
+    useEffect(() {
+      if (!showImportedCommunities) return null;
+      var cancelled = false;
+      Future<void> revealImportedCommunities() async {
+        // Let the hosted sheet and pushed Add route finish dismissing first.
+        do {
+          await WidgetsBinding.instance.endOfFrame;
+          if (cancelled || !context.mounted) return;
+        } while (ModalRoute.of(context)?.isCurrent == false);
+        if (!ref.read(communityGridLandingProvider)) return;
+        ref.read(communityGridLandingProvider.notifier).clear();
+        openCommunityGrid();
+      }
+
+      unawaited(revealImportedCommunities());
+      return () => cancelled = true;
+    }, [showImportedCommunities]);
 
     void openCommunitySwitcher() {
       // Freeze the menu shape for this presentation. If a cold permission
@@ -424,8 +455,8 @@ class ChannelsPage extends HookConsumerWidget {
       appBar: FrostedAppBar(
         key: headerKey,
         onNativeReadyChanged: (ready) => nativeHeaderReady.value = ready,
-        nativeTitle: communityName.isEmpty ? 'Community' : communityName,
-        nativeLargeTitle: true,
+        nativeTitle: '',
+        nativeLargeTitle: false,
         nativeLeading: IosNavigationAction(
           label: 'Community settings',
           onAvatarBoundsChanged: (bounds) {
@@ -451,18 +482,31 @@ class ChannelsPage extends HookConsumerWidget {
             IosNavigationAction(
               label: 'Search',
               symbol: 'magnifyingglass',
+              sharesBackground: true,
+              icon: BuzzIcons.search300,
               onPressed: onSearch,
+            ),
+          if (onInbox != null)
+            IosNavigationAction(
+              label: 'Inbox',
+              symbol: 'tray',
+              sharesBackground: true,
+              icon: BuzzIcons.inbox300,
+              activityColor: hasUnreadInbox ? context.colors.primary : null,
+              activityLabel: hasUnreadInbox ? 'Unread' : null,
+              onPressed: onInbox,
             ),
           IosNavigationAction(
             label: 'Settings',
+            sharesBackground: false,
             avatarIdentity: '${activeCommunity?.id}:${activeCommunity?.pubkey}',
             symbol: 'person.crop.circle',
             imageUrl: profile?.avatarUrl,
             avatarInitial: profile?.initial ?? '?',
             onPressed: () => Navigator.of(context).push(
-              _SettingsPageRoute(
+              BottomUpPageRoute<void>(
                 builder: settingsPageBuilder,
-                onTransitionProgress: onSettingsTransitionProgress,
+                reducedMotion: reducedMotion,
               ),
             ),
           ),
@@ -486,19 +530,18 @@ class ChannelsPage extends HookConsumerWidget {
         ),
         centerTitle: false,
         titleStyle: headerTitleStyle,
-        title: _CommunityHeaderTitle(
-          style: headerTitleStyle,
-          onTap: openCommunitySwitcher,
-        ),
+        title: const SizedBox.shrink(),
         actions: [
           _ChannelHeaderActions(
             onSearch: onSearch,
+            onInbox: onInbox,
+            hasUnreadInbox: hasUnreadInbox,
             onSettings: () {
               unawaited(HapticFeedback.lightImpact());
               Navigator.of(context).push(
-                _SettingsPageRoute(
+                BottomUpPageRoute<void>(
                   builder: settingsPageBuilder,
-                  onTransitionProgress: onSettingsTransitionProgress,
+                  reducedMotion: reducedMotion,
                 ),
               );
             },
@@ -524,11 +567,9 @@ class ChannelsPage extends HookConsumerWidget {
   }
 }
 
-/// A custom route deliberately avoids [MaterialPageRoute]'s platform exit
-/// transition on Home. Settings has a centered scale-and-fade transition, not
-/// a lateral page push.
-class _SettingsPageRoute extends PageRouteBuilder<void> {
-  _SettingsPageRoute({
+/// Scale-and-fade route retained for the community switcher.
+class _CommunitySurfaceRoute extends PageRouteBuilder<void> {
+  _CommunitySurfaceRoute({
     required WidgetBuilder builder,
     required this.onTransitionProgress,
     bool? opaque,

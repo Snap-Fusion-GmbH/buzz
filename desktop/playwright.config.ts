@@ -107,6 +107,7 @@ export default defineConfig({
         "**/huddle-thread-load-failure.spec.ts",
         "**/huddle-screen-sharing.spec.ts",
         "**/huddle-camera.spec.ts",
+        "**/huddle-video-latency.spec.ts",
         "**/workspace-rail.spec.ts",
         "**/community-rail.spec.ts",
         "**/boot-splash.spec.ts",

@@ -4,6 +4,10 @@ import * as React from "react";
 import { Button } from "@/shared/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import type { ScreenVideoStream, VideoBatch } from "../lib/screenShare";
+import {
+  LIVE_VIDEO_MAX_LAG_MS,
+  startLiveVideoPlayout,
+} from "../lib/videoPlayout";
 
 /** H.264 is transmuxed to live MP4; the browser's video engine renders every frame. */
 export function ScreenVideoPlayer({
@@ -83,8 +87,10 @@ export function ScreenVideoPlayer({
             node: video,
             mode: "video",
             fps: 30,
-            flushingTime: 50,
-            maxDelay: 800,
+            flushingTime: 25,
+            // JMuxer does not enforce maxDelay with periodic flushing.
+            // Presentation/append events enforce our live bound instead.
+            maxDelay: LIVE_VIDEO_MAX_LAG_MS,
             clearBuffer: true,
             onReady: () => {
               if (disposed || epoch !== generation) return;
@@ -139,16 +145,6 @@ export function ScreenVideoPlayer({
             isLastVideoFrameComplete: true,
           });
         }
-        // Bound playback lag; don't retain minutes of video in a paused viewer.
-        if (
-          video.buffered.length &&
-          video.buffered.end(video.buffered.length - 1) - video.currentTime > 3
-        ) {
-          video.currentTime = Math.max(
-            0,
-            video.buffered.end(video.buffered.length - 1) - 0.5,
-          );
-        }
         const epoch = generation;
         void video.play().catch((playError) => {
           if (!disposed && epoch === generation)
@@ -158,9 +154,13 @@ export function ScreenVideoPlayer({
         fail(`Video playback failed: ${String(error)}`);
       }
     };
+    const stopPlayout = startLiveVideoPlayout(video, (error) =>
+      fail(`Live video playback failed: ${String(error)}`),
+    );
     const unsubscribe = stream.subscribe(feed);
     return () => {
       disposed = true;
+      stopPlayout();
       unsubscribe();
       destroy();
     };

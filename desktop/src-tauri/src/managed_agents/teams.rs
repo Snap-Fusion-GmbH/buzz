@@ -81,7 +81,12 @@ fn built_in_team_order(built_ins: &[BuiltInTeam], id: &str) -> Option<usize> {
 /// (name, description, persona membership). Returns the merged list and whether
 /// the store changed.
 fn merge_teams(stored: Vec<TeamRecord>, now: &str) -> (Vec<TeamRecord>, bool) {
-    merge_teams_impl(BUILT_IN_TEAMS, RETIRED_BUILT_IN_TEAMS, stored, now)
+    let built_ins = if super::starter_defaults::enabled() {
+        BUILT_IN_TEAMS
+    } else {
+        &[]
+    };
+    merge_teams_impl(built_ins, RETIRED_BUILT_IN_TEAMS, stored, now)
 }
 
 fn merge_teams_impl(

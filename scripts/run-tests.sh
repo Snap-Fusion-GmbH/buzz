@@ -87,6 +87,12 @@ run_unit_tests() {
   run_test_step "buzz-auth unit tests" \
     cargo test -p buzz-auth --lib -- --nocapture
 
+  # Mesh JWKS proxy-bypass regression: infra-free loopback I/O with
+  # child-process environment isolation. --lib does not select its binary.
+  # Keep this fallback in step with `just test-unit`.
+  run_test_step "buzz-auth mesh JWKS proxy regression" \
+    cargo test -p buzz-auth --test mesh_jwks_proxy -- --nocapture
+
   # Cross-pod disconnect payload tests (NIP-FI and community archive fence;
   # infra-free). Mirrors `just test-unit`.
   run_test_step "buzz-pubsub conn_control tests" \
@@ -137,6 +143,9 @@ run_unit_tests() {
 
   run_test_step "buzz-admin partition audit outcome contract test" \
     cargo test -p buzz-admin tests::partition_audit_outcomes_keep_their_json_names_and_exit_codes -- --exact --nocapture
+
+  run_test_step "buzz-admin NIP-FI binding command tests" \
+    cargo test -p buzz-admin nip_fi::tests -- --nocapture
 
   # Multi-tenant conformance gate: independent replay checker + golden
   # fixtures (buzz-conformance). Pure in-process trace replay, no infra.
@@ -242,6 +251,9 @@ run_unit_tests() {
   run_test_step "buzz-relay NIP-FI config tests" \
     cargo test -p buzz-relay --lib nip_fi_config:: -- --nocapture
 
+  run_test_step "buzz-relay NIP-FI resolver tests" \
+    cargo test -p buzz-relay --lib nip_fi_resolver:: -- --nocapture
+
   # Infra-free REQ subscription-lifecycle tests, by exact name: the rest of
   # handlers::req needs a database.
   run_test_step "buzz-relay REQ subscription lifecycle tests" \
@@ -334,6 +346,17 @@ run_unit_tests() {
     connection::tests::expiry_notice_queued_on_ctrl_before_cancel
     connection::tests::f3_root_outer_wrapper_delivers_denial_on_bootstrap_cancellation
     connection::tests::f3_root_pre_built_expired_gate_terminates_connection
+    connection::terminal_close_delivery_tests::key_pairing_mismatch_closes_with_1008_on_real_socket
+    connection::terminal_close_delivery_tests::session_expiry_denial_closes_with_1008_on_real_socket
+    connection::terminal_close_delivery_tests::server_holds_socket_for_client_close_reply
+    connection::terminal_close_delivery_tests::server_finishes_promptly_when_client_answers_close
+    connection::terminal_close_delivery_tests::stalled_cleanup_does_not_hold_socket_open
+    connection::terminal_close_delivery_tests::bootstrap_drain_holds_socket_for_client_close_reply
+    connection::terminal_close_delivery_tests::stalled_expiry_barrier_does_not_hold_socket_open
+    connection::terminal_close_delivery_tests::blocked_frame_handler_does_not_hold_socket_open
+    connection::terminal_close_delivery_tests::refused_bootstrap_holds_connection_slot_until_socket_ends
+    connection::terminal_close_delivery_tests::stalled_bootstrap_holds_connection_slot
+    connection::terminal_close_delivery_tests::peer_wait_replies_to_client_initiated_close
     handlers::auth::tests::b2_pre_cancelled_connection_never_becomes_authenticated
     handlers::auth::tests::fi_ban_check_error_emits_terminal_authorization_unavailable
     handlers::auth::tests::fi_root_authorization_denied_rows_emit_identical_frames

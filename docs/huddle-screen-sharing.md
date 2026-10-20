@@ -26,6 +26,15 @@ without ending the capture. Rejected and pre-cooldown pixels are discarded,
 not replayed. A zero-second hint still backs off; persistent refusals, long
 quota hints, disconnects, and capture failures remain terminal and visible.
 
+The shared camera/screen pipeline releases startup and recovery IDRs immediately
+and bounds partial batches to 240 ms. Queue overflow retires old dependencies;
+stale packets cannot become fresh simply by receiving a new signature. At most
+four publications await acknowledgements, without blocking capture on each ACK.
+The player targets 300 ms of buffer headroom and corrects lag above 450 ms on
+media progress and frame presentation, including after a viewer resumes.
+See [camera video latency](huddle-camera-sharing.md#live-latency) for recovery
+and freshness details. Capture cadence and wire limits are unchanged.
+
 ## Manual Validation
 
 Use a native development build and a relay built from this branch. Existing
@@ -92,10 +101,11 @@ pending, and verify that both the picker and any stream are retired.
   ultrawide capture from negotiating an invalid aspect ratio and collapsing.
 - Desktop `screenShare.test.mjs` and `screenPublisher.test.mjs`: stale
   sequences, stop/replacement fences, viewer expiry, bounded recipients,
-  single-flight publication, expiry while another sender stays live, and
-  stopping during an in-flight capture. Production publisher tests also cover
-  zero-second quota hints, fresh-frame recovery, cancellation during cooldown,
-  and bounded terminal retries.
+  single-flight capture with bounded pipelined publication, expiry while another
+  sender stays live, and stopping during an in-flight capture. Production
+  publisher tests also cover zero-second quota hints, fresh-keyframe recovery,
+  stale-send cancellation, late acknowledgement fences, cancellation during
+  cooldown, and bounded terminal retries.
 - Scoped access-revocation tests: a huddle-scoped listener does not receive
   another channel's revocation hint.
 - `huddleMicrophone.test.mjs` and `huddle-microphone.spec.ts`: unsupported
@@ -107,6 +117,10 @@ pending, and verify that both the picker and any stream are retired.
   A 75-second playback test exercises repeated media-buffer cleanup.
   The native IPC boundary and relay are mocked; these tests cannot establish
   OS permission/capture behavior or live relay isolation.
+- `huddle-video-latency.spec.ts` measures the first decoded presentations after
+  warm keyframe-history replay for camera and screen. Production-player JSDOM
+  tests cover catch-up triggers, buffered gaps, visibility changes, teardown,
+  and explicit retry after a native seek error.
 
 Native and live-relay validation plus explicit human confirmation are required
 before marking a PR ready. Browser screenshots are not a substitute.

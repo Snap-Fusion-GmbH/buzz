@@ -194,10 +194,10 @@ export function HuddleCameraProvider({
         }),
       publish: (share, alive, failed) =>
         startScreenPublisher({
-          capture: async () => {
+          capture: async (refreshKeyframe) => {
             const json = await invoke<string | null>(
               "read_huddle_camera_video_chunk",
-              { sessionId: share.session_id },
+              { sessionId: share.session_id, refreshKeyframe },
             );
             return json ? (JSON.parse(json) as RelayEvent) : null;
           },

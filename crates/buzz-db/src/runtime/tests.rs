@@ -77,6 +77,33 @@ async fn setup_db() -> Db {
     Db::from_pool(pool)
 }
 
+/// A pool that becomes unavailable after the candidate read must end the
+/// sweep at the first tenant, not cost one acquire attempt per tenant.
+#[tokio::test]
+async fn fleet_sweep_stops_at_first_unavailable_connection() {
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .connect_lazy(&crate::test_support::database_url())
+        .expect("construct lazy sweep pool");
+    pool.close().await;
+    let attempted = std::cell::Cell::new(0);
+    let candidates = (0..3).map(|_| {
+        attempted.set(attempted.get() + 1);
+        Uuid::new_v4()
+    });
+
+    let committed = sweep_admitted_communities(
+        &pool,
+        candidates,
+        observability::WriterOperation::Maintenance,
+        "test_sweep",
+        |_, _| async { Ok(()) },
+    )
+    .await;
+
+    assert!(committed.is_empty());
+    assert_eq!(attempted.get(), 1, "sweep must stop after the outage");
+}
+
 #[tokio::test]
 async fn event_write_transaction_preserves_legacy_acquisition_metrics() {
     use metrics_util::debugging::{DebugValue, DebuggingRecorder};
@@ -1955,11 +1982,20 @@ async fn routed_fallback_spends_one_acquire_budget_when_aurora_cache_is_cold() {
     db.set_replica_read_max_age_for_tests(Some(Duration::from_secs(5)));
 
     let read_pool = db.read_pool.clone().expect("reader pool configured");
-    // Establish and hold the reader's only connection: saturated.
-    let held = read_pool
-        .acquire()
-        .await
-        .expect("establish the reader's sole connection");
+    // Establish and hold the reader's only connection: saturated. A fresh
+    // connection can outlast the 150ms acquire budget on a loaded runner, and
+    // the budget is under test only once the connection is held.
+    let held = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match read_pool.acquire().await {
+                Err(sqlx::Error::PoolTimedOut) => continue,
+                connection => break connection,
+            }
+        }
+    })
+    .await
+    .expect("reader connects within 5s")
+    .expect("establish the reader's sole connection");
     assert_eq!(
         db.read_max_connections, 1,
         "reader max must report 1 for this fixture to test saturation"
