@@ -118,6 +118,9 @@ const RETIRED_PERSONAS: &[(&str, &str)] = &[
 ];
 
 fn built_in_persona_records(now: &str) -> Vec<AgentDefinition> {
+    if !super::starter_defaults::enabled() {
+        return Vec::new();
+    }
     BUILT_IN_PERSONAS
         .iter()
         .map(|persona| AgentDefinition {

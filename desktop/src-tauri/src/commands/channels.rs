@@ -407,6 +407,9 @@ async fn ensure_starter_channels_inner(
     state: &AppState,
     changed_channel_ids: &mut Vec<String>,
 ) -> Result<Vec<ChannelInfo>, String> {
+    if !crate::managed_agents::starter_defaults::enabled() {
+        return fetch_channels(state, DirectoryScope::MemberOnly).await;
+    }
     let mut existing_channels = fetch_channels(state, DirectoryScope::IncludeOpenDirectory).await?;
     let relay_scope = relay_api_base_url_with_override(state);
     let creator_keys = state.signing_keys()?;
