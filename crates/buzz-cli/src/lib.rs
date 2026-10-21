@@ -1300,7 +1300,7 @@ pub enum ReposCmd {
     },
     /// List repository announcements
     List {
-        /// Owner pubkey (64-char hex). Omit for your repos.
+        /// Owner pubkey (64-char hex). Defaults to self and the attested owner.
         #[arg(long)]
         owner: Option<String>,
         /// Maximum number of results
@@ -1459,13 +1459,13 @@ pub enum ProjectsCmd {
     Get {
         /// Project slug
         slug: String,
-        /// Owner pubkey (64-char hex). Defaults to the current identity.
+        /// Owner pubkey. Defaults to self and attested owner; required for ambiguous slugs.
         #[arg(long)]
         owner: Option<String>,
     },
     /// List projects
     List {
-        /// Owner pubkey (64-char hex). Defaults to the current identity.
+        /// Owner pubkey (64-char hex). Defaults to self and the attested owner.
         #[arg(long)]
         owner: Option<String>,
         /// Maximum number of results

@@ -27,6 +27,26 @@ pub mod workflows;
 use crate::{client::normalize_write_response, error::CliError};
 use nostr::{EventBuilder, Tag};
 
+/// Read the caller's metadata and its attested owner's without widening writes.
+pub(crate) fn read_author_pubkeys(
+    client: &crate::client::BuzzClient,
+    explicit_owner: Option<&str>,
+) -> Result<Vec<String>, CliError> {
+    if let Some(owner) = explicit_owner {
+        crate::validate::validate_hex64(owner)?;
+        return Ok(vec![owner.to_ascii_lowercase()]);
+    }
+    let mut authors = vec![client.keys().public_key().to_hex()];
+    if let Some(owner) = client.auth_tag_owner_hex() {
+        crate::validate::validate_hex64(&owner)?;
+        let owner = owner.to_ascii_lowercase();
+        if !authors.contains(&owner) {
+            authors.push(owner);
+        }
+    }
+    Ok(authors)
+}
+
 pub(crate) const GIT_ORIGIN_CHANNEL_ENV: &str = "BUZZ_GIT_ORIGIN_CHANNEL_ID";
 const GIT_ORIGIN_AGENT_ENV: &str = "BUZZ_GIT_ORIGIN_AGENT_NAME";
 

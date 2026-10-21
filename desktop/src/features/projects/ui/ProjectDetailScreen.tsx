@@ -771,6 +771,7 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
   };
   const agentPageContext = buildProjectDetailAgentContext({
     activeTab,
+    localRepositoryPath: filesSourceControls.localPath,
     branch: activeBranch,
     file: filesContext,
     project,

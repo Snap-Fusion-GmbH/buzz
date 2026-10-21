@@ -3725,7 +3725,7 @@ async fn fetch_channel_info_once(channel_id: Uuid, rest: &RestClient) -> Option<
     }
 }
 
-/// Resolve the listed NIP-MP project whose home channel is `channel_id`.
+/// Resolve the channel-bound NIP-MP project, including an unlisted home.
 pub(crate) async fn fetch_project_home_for_channel(
     channel_id: Uuid,
     rest: &RestClient,
@@ -11042,8 +11042,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             slug: "last-known".into(),
             owner: "a".repeat(64),
             coordinate: format!("30621:{}:last-known", "a".repeat(64)),
-            default_repo_owner: None,
-            default_repo_id: None,
+            ..Default::default()
         };
         resolver.projects.write().unwrap().insert(
             id,

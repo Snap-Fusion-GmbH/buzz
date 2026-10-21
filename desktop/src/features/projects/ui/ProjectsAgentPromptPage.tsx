@@ -46,6 +46,7 @@ import { pickDefaultProjectsAgent } from "@/features/projects/lib/projectAgentSe
 import { AgentContextPayloadPreview } from "./AgentContextPayloadPreview";
 import {
   PROJECT_WORKSPACE_CONTEXT_MARKER,
+  credentialFreeCloneUrl,
   splitProjectDetailAgentContext,
   UNTRUSTED_CONTEXT_NOTICE,
   untrustedPromptValue,
@@ -115,13 +116,14 @@ function repoContextBlock(projects: readonly Project[]) {
           ? `${project.name} / ${repository.name}`
           : project.name,
       repoAddress: repository.repoAddress,
+      cloneUrl: credentialFreeCloneUrl(repository.cloneUrls[0]),
     })),
   );
   const listed = repositories
     .slice(0, MAX_CONTEXT_REPOS)
     .map(
       (repository) =>
-        `- ${untrustedPromptValue(repository.label)} (address: ${untrustedPromptValue(repository.repoAddress, 400)})`,
+        `- ${untrustedPromptValue(repository.label)} (address: ${untrustedPromptValue(repository.repoAddress, 400)})${repository.cloneUrl ? ` (clone URL: ${untrustedPromptValue(repository.cloneUrl, 2048)})` : ""}`,
     );
   const remaining = repositories.length - listed.length;
   return ["", "---", PROJECT_WORKSPACE_CONTEXT_MARKER, ...listed]

@@ -307,18 +307,11 @@ pub async fn cmd_list_repos(
     owner: Option<&str>,
     limit: Option<u32>,
 ) -> Result<(), CliError> {
-    // Default to self if no owner specified.
-    let pubkey = match owner {
-        Some(pk) => {
-            crate::validate::validate_hex64(pk)?;
-            pk.to_string()
-        }
-        None => client.keys().public_key().to_hex(),
-    };
+    let authors = super::read_author_pubkeys(client, owner)?;
 
     let mut filter = serde_json::json!({
         "kinds": [30617],
-        "authors": [pubkey]
+        "authors": authors
     });
 
     if let Some(n) = limit {

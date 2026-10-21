@@ -125,6 +125,43 @@ test("private GitHub import requires consent, recovers access errors and appears
   await actions.getByRole("button", { name: "Fetch", exact: true }).click();
   await actions.getByRole("button", { name: /^Push\b/ }).click();
   await expect(actions.getByRole("button", { name: /^Push\b/ })).toHaveCount(0);
+
+  await page.getByTestId("project-right-panel-chat-tab").click();
+  const chat = page.getByTestId("project-agent-chat-panel");
+  await expect(chat).toBeVisible();
+  await chat.getByTestId("agent-context-preview-trigger").click();
+  const preview = chat.getByTestId("agent-context-preview-payload");
+  await expect(preview).toContainText(
+    'Clone URL: "https://github.com/Snap-Fusion-GmbH/private-demo.git"',
+  );
+  await expect(preview).toContainText("Local checkout:");
+  await expect(preview).toContainText("REPOS/private-demo");
+  await chat.getByTestId("agent-context-preview-trigger").click();
+  await chat
+    .getByTestId("message-input")
+    .fill("Inspect the existing checkout.");
+  await chat.getByTestId("message-input").press("Enter");
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const log =
+          (
+            window as Window & {
+              __BUZZ_E2E_COMMAND_LOG__?: Array<{
+                command: string;
+                payload: { content?: string };
+              }>;
+            }
+          ).__BUZZ_E2E_COMMAND_LOG__ ?? [];
+        return (
+          log.filter((entry) => entry.command === "send_channel_message").at(-1)
+            ?.payload.content ?? ""
+        );
+      }),
+    )
+    .toMatch(
+      /Clone URL: .*github\.com.*Local checkout: .*REPOS\/private-demo/s,
+    );
 });
 
 test("GitHub repository listing failures stay recoverable instead of looking empty", async ({

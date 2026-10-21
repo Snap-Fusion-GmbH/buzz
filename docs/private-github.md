@@ -57,6 +57,23 @@ authentication; Azure-hosted agents need a separately approved workload/GitHub
 App credential design. Import does not add users to GitHub or synchronize
 GitHub issues, PRs, project boards or ACLs.
 
+## Agent Repository Context
+
+Owner-attested agents discover both their own and their owner's project and
+repository announcements through the CLI. An explicit `--owner` still narrows
+the read, ambiguous project slugs require it, and mutation lookups remain bound
+to the agent's own signing identity.
+
+Unlisted projects remain unlisted. A project with an authoritative repository
+binding to the agent's current channel supplies that channel's project context,
+including its credential-free canonical clone URL. This is not a global
+project listing or an inheritance of private channel membership.
+
+Project chat includes the canonical clone URL and the known local checkout
+path in its pre-send context preview. The same payload reaches the agent.
+The agent must verify the path and its Git origin before editing; a path on
+the sending desktop is not a promise that a remote machine has that checkout.
+
 ## Validation
 
 The browser journey covers consent, access failure/retry, import into the real
