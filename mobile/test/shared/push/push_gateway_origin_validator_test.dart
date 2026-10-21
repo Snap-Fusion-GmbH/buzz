@@ -20,6 +20,7 @@ void main() {
         includeParentEnvironment: false,
         environment: {
           'PATH': Platform.environment['PATH']!,
+          'HOME': Platform.environment['HOME']!,
           'SRCROOT': '${Directory.current.path}/ios',
           'CONFIGURATION': 'Release',
           ...environment,
