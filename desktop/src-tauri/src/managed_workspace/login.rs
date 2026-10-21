@@ -16,7 +16,7 @@ use tokio::{net::TcpListener, sync::oneshot};
 
 use super::{configuration, ManagedWorkspaceState, StoredSession};
 
-type MicrosoftClient =
+pub(super) type MicrosoftClient =
     BasicClient<EndpointSet, EndpointNotSet, EndpointNotSet, EndpointNotSet, EndpointSet>;
 
 struct CallbackState {

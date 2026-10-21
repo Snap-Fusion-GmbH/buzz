@@ -26,26 +26,34 @@ export function ManagedWorkspaceGate({ children }: { children: ReactNode }) {
   const { addCommunity, switchCommunity } = useCommunities();
   const [status, setStatus] = useState<ManagedWorkspaceStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [reauthRequired, setReauthRequired] = useState(false);
   const [pending, setPending] = useState(false);
   const [prepared, setPrepared] = useState<string | null>(null);
   const generation = useRef(0);
   const pendingRef = useRef(false);
+  const checkingRef = useRef(false);
   const [recovery, setRecovery] = useState<
     "locked" | "reset-failed" | "relaunch" | null
   >(null);
 
   const check = useCallback(async () => {
-    if (pendingRef.current) return;
+    if (pendingRef.current || checkingRef.current) return;
+    checkingRef.current = true;
     const expected = generation.current;
     try {
       const result = await getManagedWorkspaceStatus();
       if (generation.current !== expected || pendingRef.current) return;
       setStatus(result);
       setError(null);
+      setReauthRequired(false);
       setRecovery((current) => (current === "locked" ? "relaunch" : current));
     } catch (reason) {
       if (generation.current !== expected || pendingRef.current) return;
       setStatus(null);
+      setReauthRequired(
+        reason === "managed_workspace_sign_in_required" ||
+          reason === "managed_workspace_session_recovery_required",
+      );
       if (reason === "managed_workspace_identity_locked") {
         setRecovery("locked");
         return;
@@ -54,7 +62,17 @@ export function ManagedWorkspaceGate({ children }: { children: ReactNode }) {
         setRecovery("reset-failed");
         return;
       }
-      setError("Workspace verification is unavailable.");
+      setError(
+        reason === "managed_workspace_sign_in_required"
+          ? "Your Microsoft session needs you to sign in again."
+          : reason === "managed_workspace_session_recovery_required"
+            ? "The saved Microsoft session could not be read. Sign in again to replace it; your Buzz identity is unchanged."
+            : reason === "managed_workspace_access_denied"
+              ? "Workspace access is not currently authorized. Signing in again will not restore access."
+              : "Workspace verification is temporarily unavailable. Retrying automatically without starting a new Microsoft sign-in.",
+      );
+    } finally {
+      checkingRef.current = false;
     }
   }, []);
 
@@ -108,6 +126,7 @@ export function ManagedWorkspaceGate({ children }: { children: ReactNode }) {
     pendingRef.current = true;
     setPending(true);
     setError(null);
+    setReauthRequired(false);
     try {
       const result = await signInManagedWorkspace();
       if (generation.current !== expected) return;
@@ -115,6 +134,7 @@ export function ManagedWorkspaceGate({ children }: { children: ReactNode }) {
     } catch (reason) {
       if (generation.current !== expected) return;
       setStatus(null);
+      setReauthRequired(true);
       setError(
         typeof reason === "string"
           ? reason
@@ -179,10 +199,12 @@ export function ManagedWorkspaceGate({ children }: { children: ReactNode }) {
           </Button>
         ) : error ? (
           <div className="space-y-3">
-            <Button className="w-full gap-2" onClick={() => void signIn()}>
-              <LogIn className="h-4 w-4" aria-hidden="true" />
-              Sign in with Microsoft
-            </Button>
+            {reauthRequired ? (
+              <Button className="w-full gap-2" onClick={() => void signIn()}>
+                <LogIn className="h-4 w-4" aria-hidden="true" />
+                Sign in with Microsoft
+              </Button>
+            ) : null}
             <Button
               variant="outline"
               className="gap-2"
