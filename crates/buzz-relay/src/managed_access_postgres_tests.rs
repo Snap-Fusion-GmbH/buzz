@@ -130,13 +130,14 @@ async fn expired_writer_membership_is_denied_without_deleting_the_roster_row() {
     let member = Keys::generate();
     let state = managed_state(&controller).await;
     let tenant = community(&state, "managed-membership-expiry").await;
-    state
+    let _ = state
         .db
         .add_relay_member(
             tenant.community(),
             &member.public_key().to_hex(),
             "member",
             Some(&controller.public_key().to_hex()),
+            &state.relay_keypair,
         )
         .await
         .unwrap();
@@ -144,13 +145,14 @@ async fn expired_writer_membership_is_denied_without_deleting_the_roster_row() {
     let decision = || check_relay_membership(&state, tenant.community(), &member_bytes, None, None);
     assert_eq!(decision().await.unwrap(), MembershipDecision::Member);
     let invitee = Keys::generate();
-    state
+    let _ = state
         .db
         .add_relay_member(
             tenant.community(),
             &invitee.public_key().to_hex(),
             "member",
             Some("invite"),
+            &state.relay_keypair,
         )
         .await
         .unwrap();
@@ -191,13 +193,14 @@ async fn expired_leases_close_root_and_audio_sessions_when_controller_is_absent(
     let member = Keys::generate();
     let state = managed_state(&controller).await;
     let tenant = community(&state, "managed-live-expiry").await;
-    state
+    let _ = state
         .db
         .add_relay_member(
             tenant.community(),
             &member.public_key().to_hex(),
             "member",
             Some(&controller.public_key().to_hex()),
+            &state.relay_keypair,
         )
         .await
         .unwrap();
@@ -270,13 +273,14 @@ async fn managed_agents_need_verified_ownership_and_a_current_same_community_own
     let mut forged_tag: serde_json::Value = serde_json::from_str(&tag).unwrap();
     forged_tag[3] = serde_json::json!("0".repeat(128));
     let forged_tag = forged_tag.to_string();
-    state
+    let _ = state
         .db
         .add_relay_member(
             tenant.community(),
             &owner.public_key().to_hex(),
             "member",
             Some(&controller.public_key().to_hex()),
+            &state.relay_keypair,
         )
         .await
         .unwrap();
@@ -381,13 +385,14 @@ async fn managed_agents_need_verified_ownership_and_a_current_same_community_own
             "expired, future or non-controller-issued owner leases cannot admit agents",
         );
     }
-    state
+    let _ = state
         .db
         .add_relay_member(
             tenant.community(),
             &controller.public_key().to_hex(),
             "owner",
             None,
+            &state.relay_keypair,
         )
         .await
         .unwrap();
@@ -408,13 +413,14 @@ async fn managed_agents_need_verified_ownership_and_a_current_same_community_own
 
     let disabled = managed_state(&controller).await;
     let disabled_tenant = community(&disabled, "managed-agents-disabled").await;
-    disabled
+    let _ = disabled
         .db
         .add_relay_member(
             disabled_tenant.community(),
             &owner.public_key().to_hex(),
             "member",
             Some(&controller.public_key().to_hex()),
+            &disabled.relay_keypair,
         )
         .await
         .unwrap();
@@ -443,13 +449,14 @@ async fn managed_agent_cannot_switch_its_recorded_owner_to_bypass_expiry() {
     let state = managed_state_with_agents(&controller, true).await;
     let tenant = community(&state, "managed-agent-fixed-owner").await;
     for human in [&owner, &replacement] {
-        state
+        let _ = state
             .db
             .add_relay_member(
                 tenant.community(),
                 &human.public_key().to_hex(),
                 "member",
                 Some(&controller.public_key().to_hex()),
+                &state.relay_keypair,
             )
             .await
             .unwrap();
@@ -498,20 +505,26 @@ async fn managed_agent_root_and_audio_sessions_follow_owner_renewal_expiry_and_r
     let agent = Keys::generate();
     let state = managed_state_with_agents(&controller, true).await;
     let tenant = community(&state, "managed-agent-live-lease").await;
-    state
+    let _ = state
         .db
         .add_relay_member(
             tenant.community(),
             &owner.public_key().to_hex(),
             "member",
             Some(&controller.public_key().to_hex()),
+            &state.relay_keypair,
         )
         .await
         .unwrap();
     for remove in [false, true] {
-        state
+        let _ = state
             .db
-            .update_relay_member_role(tenant.community(), &owner.public_key().to_hex(), "member")
+            .update_relay_member_role(
+                tenant.community(),
+                &owner.public_key().to_hex(),
+                "member",
+                &state.relay_keypair,
+            )
             .await
             .unwrap();
         let root_cancel = CancellationToken::new();
@@ -551,9 +564,13 @@ async fn managed_agent_root_and_audio_sessions_follow_owner_renewal_expiry_and_r
         assert!(!root_cancel.is_cancelled());
         assert!(!audio_cancel.is_cancelled());
         if remove {
-            state
+            let _ = state
                 .db
-                .remove_relay_member(tenant.community(), &owner.public_key().to_hex())
+                .remove_relay_member(
+                    tenant.community(),
+                    &owner.public_key().to_hex(),
+                    &state.relay_keypair,
+                )
                 .await
                 .unwrap();
         } else {
@@ -566,12 +583,13 @@ async fn managed_agent_root_and_audio_sessions_follow_owner_renewal_expiry_and_r
             .execute(state.db.pool())
             .await
             .unwrap();
-            state
+            let _ = state
                 .db
                 .update_relay_member_role(
                     tenant.community(),
                     &owner.public_key().to_hex(),
                     "member",
+                    &state.relay_keypair,
                 )
                 .await
                 .unwrap();
@@ -612,13 +630,14 @@ async fn stored_owner_metadata_cannot_renew_a_session_without_a_delegation_crede
     let state = managed_state_with_agents(&controller, true).await;
     let tenant = community(&state, "managed-agent-unproven-owner").await;
     for key in [&owner, &agent] {
-        state
+        let _ = state
             .db
             .add_relay_member(
                 tenant.community(),
                 &key.public_key().to_hex(),
                 "member",
                 Some(&controller.public_key().to_hex()),
+                &state.relay_keypair,
             )
             .await
             .unwrap();
