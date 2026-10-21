@@ -15,6 +15,18 @@ const VIDEO = JSON.parse(
 ) as VideoBatch[];
 
 async function open(page: Page, main = true) {
+  // CI has no physical camera; discovery must match the canvas capture fixture.
+  await page.addInitScript(() => {
+    navigator.mediaDevices.enumerateDevices = async () => [
+      {
+        kind: "videoinput",
+        deviceId: "fixture-camera",
+        groupId: "fixture",
+        label: "Virtual camera",
+        toJSON: () => ({}),
+      } as MediaDeviceInfo,
+    ];
+  });
   await installMockBridge(page, {
     windowLabel: main ? "main" : `huddle-${CHANNEL}`,
     huddle: {
