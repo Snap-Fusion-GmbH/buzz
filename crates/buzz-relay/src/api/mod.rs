@@ -203,7 +203,12 @@ pub mod relay_members {
             return Ok(MembershipDecision::Member);
         }
 
-        if state.config.allow_nip_oa_auth {
+        let managed_delegation = state
+            .config
+            .managed_access
+            .as_ref()
+            .is_some_and(|policy| policy.allows_owner_attested_agents());
+        if state.config.allow_nip_oa_auth || managed_delegation {
             if let Some(tag_json) = auth_tag_header {
                 let agent_pubkey = nostr::PublicKey::from_slice(pubkey_bytes)
                     .map_err(|e| format!("invalid agent pubkey for NIP-OA check: {e}"))?;
@@ -218,11 +223,34 @@ pub mod relay_members {
                     auth_created_at,
                 ) {
                     Ok(owner_pubkey) => {
+                        if state
+                            .config
+                            .managed_access
+                            .as_ref()
+                            .is_some_and(|policy| !policy.can_delegate(owner_pubkey.as_bytes()))
+                        {
+                            return Ok(MembershipDecision::Denied);
+                        }
                         let owner_hex = owner_pubkey.to_hex();
                         let owner_is_member = read_membership(state, community, &owner_hex, writer)
                             .await
                             .map_err(|e| format!("relay membership check (owner) failed: {e}"))?;
                         if owner_is_member {
+                            if managed_delegation {
+                                let recorded_owner = tokio::time::timeout(
+                                    crate::managed_access::LOOKUP_TIMEOUT,
+                                    state.db.get_agent_channel_policy(community, pubkey_bytes),
+                                )
+                                .await
+                                .map_err(|_| "agent owner lookup timed out".to_string())?
+                                .map_err(|e| format!("agent owner lookup failed: {e}"))?
+                                .and_then(|(_, owner)| owner);
+                                if recorded_owner
+                                    .is_some_and(|recorded| recorded != owner_pubkey.as_bytes())
+                                {
+                                    return Ok(MembershipDecision::Denied);
+                                }
+                            }
                             debug!(
                                 agent = %pubkey_hex,
                                 owner = %owner_hex,

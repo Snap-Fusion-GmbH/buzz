@@ -659,7 +659,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
             if let Some(owner) = nip_oa_owner {
                 state
                     .conn_manager
-                    .set_admitted_owner(conn_id, owner.to_bytes());
+                    .set_delegated_owner(conn_id, owner.to_bytes());
             }
             // The bind carries the admitting NIP-FI issuer, so a concurrent
             // `disconnect_nip_fi` scan that sees the pubkey also sees its

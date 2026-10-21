@@ -30,6 +30,7 @@ does not already exist. A locked keyring uses the existing recovery UI.
 
 `BUZZ_MANAGED_ACCESS` is an optional strict JSON object containing the
 controller's canonical `controller_pubkey` and `membership_ttl_seconds`.
+The optional `allow_owner_attested_agents` boolean defaults to `false`.
 
 Startup requires all of the following:
 
@@ -37,6 +38,20 @@ Startup requires all of the following:
 - `RELAY_OWNER_PUBKEY` equals the controller.
 - NIP-OA owner delegation is disabled.
 - The lease is between 30 and 300 seconds.
+
+When `allow_owner_attested_agents` is enabled, an agent may authenticate with
+its own key and a cryptographically verified NIP-OA owner credential. The owner
+must have a fresh, controller-issued membership lease in the same community.
+The permanent controller cannot serve as a delegated human owner, and an agent
+cannot delegate onwards using only its derived access. General
+`BUZZ_ALLOW_NIP_OA_AUTH` remains disabled.
+
+Agent access does not create a permanent roster grant, inherit the owner's
+channel memberships, or permit changes to controller-managed channels. Private
+channels and DMs still require the agent's own channel membership. HTTP requests
+recheck the owner lease; root and audio sockets record the admitted owner and
+are closed by the same bounded lease monitor when that owner expires or is
+removed. Bans retain the existing owner-to-agent revocation behavior.
 
 Non-controller members need both a controller-issued `added_by` record and a
 fresh `updated_at`. Ordinary invite rows and another member's grants cannot

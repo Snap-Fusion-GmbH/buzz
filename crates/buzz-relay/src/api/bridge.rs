@@ -1241,7 +1241,13 @@ async fn submit_event_authed(
         }
     };
     if let Some(owner) = nip_oa_owner {
-        super::relay_members::materialize_nip_oa_owner(state, tenant, &pubkey, &owner).await;
+        if !super::relay_members::materialize_nip_oa_owner(state, tenant, &pubkey, &owner).await {
+            let response = super::internal_error(crate::handlers::auth::OWNER_LINK_ERROR);
+            return SubmitOutcome::Err {
+                status: response.0,
+                response,
+            };
+        }
     }
 
     let auth = IngestAuth::Http {
@@ -8678,6 +8684,64 @@ pub(crate) mod postgres_tests {
             .unwrap();
         assert!(materialize().await, "a known link is still confirmed");
         assert_eq!(agent_rows().await, 0, "a known link writes nothing");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres and Redis"]
+    async fn conflicting_http_owner_link_refuses_the_event_before_ingest() {
+        let state = bridge_handler_test_state()
+            .await
+            .expect("local Postgres and Redis");
+        let host = format!("owner-conflict-{}.local", uuid::Uuid::new_v4());
+        state.db.ensure_configured_community(&host).await.unwrap();
+        let tenant = crate::tenant::bind_community(&state.db, &host)
+            .await
+            .unwrap();
+        let (owner, replacement, agent) = (Keys::generate(), Keys::generate(), Keys::generate());
+        assert!(
+            super::super::relay_members::materialize_nip_oa_owner(
+                &state,
+                &tenant,
+                &agent.public_key(),
+                &owner.public_key(),
+            )
+            .await
+        );
+        let tag =
+            buzz_sdk::nip_oa::compute_auth_tag(&replacement, &agent.public_key(), "").unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert("x-auth-tag", tag.parse().unwrap());
+        let event = EventBuilder::new(Kind::Metadata, r#"{"name":"must-not-persist"}"#)
+            .sign_with_keys(&agent)
+            .unwrap();
+        let result = submit_event_authed(
+            &state,
+            &tenant,
+            &headers,
+            &serde_json::to_vec(&event).unwrap(),
+            agent.public_key(),
+            fresh_nip98_event_id_bytes(),
+            Some(nostr::Timestamp::now().as_secs()),
+        )
+        .await;
+        assert!(
+            matches!(
+                result,
+                SubmitOutcome::Err {
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                    ..
+                }
+            ),
+            "failed owner materialization must propagate rather than permit a write",
+        );
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM events WHERE community_id=$1 AND id=$2")
+                .bind(tenant.community().as_uuid())
+                .bind(event.id.as_bytes().as_slice())
+                .fetch_one(state.db.pool())
+                .await
+                .unwrap();
+        assert_eq!(count, 0);
     }
 
     /// An agent socket admitted with no owner, then linked to its owner by a

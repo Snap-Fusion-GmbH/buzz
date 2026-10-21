@@ -19,6 +19,8 @@ pub(crate) const LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
 struct PolicyInput {
     controller_pubkey: String,
     membership_ttl_seconds: u64,
+    #[serde(default)]
+    allow_owner_attested_agents: bool,
 }
 
 /// Explicit deployment policy for a controller-owned, directory-managed relay.
@@ -26,6 +28,7 @@ struct PolicyInput {
 pub struct ManagedAccessPolicy {
     controller: PublicKey,
     ttl: Duration,
+    allow_owner_attested_agents: bool,
 }
 
 impl ManagedAccessPolicy {
@@ -56,6 +59,7 @@ impl ManagedAccessPolicy {
         Ok(Self {
             controller,
             ttl: Duration::from_secs(input.membership_ttl_seconds),
+            allow_owner_attested_agents: input.allow_owner_attested_agents,
         })
     }
 
@@ -88,6 +92,16 @@ impl ManagedAccessPolicy {
     /// Whether an actor is the deployment's pinned directory controller.
     pub fn is_controller(&self, actor: &[u8]) -> bool {
         actor == self.controller.as_bytes()
+    }
+
+    /// Whether verified agents may use a directory-enrolled human owner's lease.
+    pub(crate) fn allows_owner_attested_agents(&self) -> bool {
+        self.allow_owner_attested_agents
+    }
+
+    /// The permanent controller identity cannot substitute for human enrollment.
+    pub(crate) fn can_delegate(&self, owner: &[u8]) -> bool {
+        self.allow_owner_attested_agents && !self.is_controller(owner)
     }
 
     /// Evaluate the writer's current membership record, including exact expiry.
@@ -138,13 +152,27 @@ pub(crate) async fn enforce_sessions(state: &Arc<AppState>, policy: &ManagedAcce
     let checks = stream::iter(sessions.iter()).for_each_concurrent(
         8,
         |(community, key, control)| async move {
-            let admitted = state
+            let membership = state
                 .db
                 .get_relay_member_with_clock(*community, &hex::encode(key))
-                .await
-                .ok()
-                .flatten()
-                .is_some_and(|(record, now)| policy.admits(&record, now));
+                .await;
+            let admitted = match membership {
+                Ok(Some((record, now))) if policy.admits(&record, now) => true,
+                Ok(_) => match control
+                    .delegated_owner()
+                    .filter(|owner| policy.can_delegate(owner))
+                {
+                    Some(owner) => state
+                        .db
+                        .get_relay_member_with_clock(*community, &hex::encode(owner))
+                        .await
+                        .is_ok_and(|record| {
+                            record.is_some_and(|(record, now)| policy.admits(&record, now))
+                        }),
+                    None => false,
+                },
+                Err(_) => false,
+            };
             if !admitted {
                 control.revoke_access();
             }
@@ -260,5 +288,30 @@ mod tests {
             Some(&policy().controller.to_hex())
         )
         .is_err());
+    }
+
+    #[test]
+    fn owner_attested_agents_are_opt_in_and_cannot_use_the_permanent_controller() {
+        let default = policy();
+        let human =
+            PublicKey::from_hex("d4c7b2f549dca865a5e28c50312616cf9e639a56e40c72c08c34d3f1e0660687")
+                .unwrap();
+        assert!(!default.allows_owner_attested_agents());
+        assert!(!default.can_delegate(human.as_bytes()));
+        let raw = serde_json::json!({
+            "controller_pubkey": default.controller.to_hex(),
+            "membership_ttl_seconds": 60,
+            "allow_owner_attested_agents": true
+        })
+        .to_string();
+        let enabled =
+            ManagedAccessPolicy::parse(&raw, true, false, Some(&default.controller.to_hex()))
+                .unwrap();
+        assert!(enabled.can_delegate(human.as_bytes()));
+        assert!(!enabled.can_delegate(default.controller.as_bytes()));
+        assert!(
+            ManagedAccessPolicy::parse(&raw, true, true, Some(&default.controller.to_hex()))
+                .is_err()
+        );
     }
 }
