@@ -9,7 +9,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use nostr::{EventBuilder, JsonUtil, Kind, Tag};
+use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag};
 use oauth2::TokenResponse;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
@@ -93,6 +93,16 @@ struct Challenge {
     endpoint: String,
 }
 
+enum WorkspaceVerification {
+    Ready(WorkspaceProfile),
+    TokenRejected,
+    EnrollmentRequired,
+}
+
+fn decode_session(raw: &str) -> Result<StoredSession, String> {
+    serde_json::from_str(raw).map_err(|_| "managed_workspace_session_recovery_required".to_string())
+}
+
 pub(crate) fn configuration() -> Result<Option<ManagedWorkspaceConfig>, String> {
     option_env!("BUZZ_DESKTOP_BUILD_MANAGED_WORKSPACE")
         .map(ManagedWorkspaceConfig::parse)
@@ -158,7 +168,7 @@ async fn profile(
     client: &reqwest::Client,
     config: &ManagedWorkspaceConfig,
     session: &StoredSession,
-) -> Result<Option<WorkspaceProfile>, String> {
+) -> Result<WorkspaceVerification, String> {
     let response = client
         .get(format!(
             "{}/v1/workspace",
@@ -169,15 +179,32 @@ async fn profile(
         .send()
         .await
         .map_err(|_| "Workspace verification unavailable".to_string())?;
-    if matches!(response.status().as_u16(), 401 | 403) {
-        return Ok(None);
+    match response.status().as_u16() {
+        401 => return Ok(WorkspaceVerification::TokenRejected),
+        403 => {
+            if response
+                .headers()
+                .get("X-Buzz-Workspace-State")
+                .is_some_and(|value| value == "enrollment-required")
+            {
+                return Ok(WorkspaceVerification::EnrollmentRequired);
+            }
+            let problem: serde_json::Value = response_json(response).await?;
+            if problem.get("detail").and_then(serde_json::Value::as_str)
+                == Some("This Buzz identity is not enrolled")
+            {
+                return Ok(WorkspaceVerification::EnrollmentRequired);
+            }
+            return Err("managed_workspace_access_denied".into());
+        }
+        _ => {}
     }
     if !response.status().is_success() {
-        return Err("Workspace membership verification unavailable".into());
+        return Err("managed_workspace_unavailable".into());
     }
     let result: WorkspaceProfile = response_json(response).await?;
     validate_profile(config, &result)?;
-    Ok(Some(result))
+    Ok(WorkspaceVerification::Ready(result))
 }
 
 fn validate_profile(
@@ -217,11 +244,13 @@ async fn renew(
     config: &ManagedWorkspaceConfig,
     session: &mut StoredSession,
     generation: u64,
-) -> Result<(), String> {
-    if now()?.saturating_add(60) < session.expires_at {
-        return Ok(());
+    client: &login::MicrosoftClient,
+    force: bool,
+) -> Result<bool, String> {
+    if !force && now()?.saturating_add(60) < session.expires_at {
+        return Ok(false);
     }
-    let token = login::client(config, &session.redirect_uri)?
+    let token = client
         .exchange_refresh_token(&oauth2::RefreshToken::new(session.refresh_token.clone()))
         .add_scope(oauth2::Scope::new(format!(
             "api://{}/workspace.access",
@@ -229,7 +258,20 @@ async fn renew(
         )))
         .request_async(&login::http_client()?)
         .await
-        .map_err(|_| "Microsoft session renewal failed; retry or sign in again".to_string())?;
+        .map_err(|error| match error {
+            oauth2::RequestTokenError::ServerResponse(response)
+                if matches!(
+                    response.error().as_ref(),
+                    "invalid_grant"
+                        | "interaction_required"
+                        | "login_required"
+                        | "consent_required"
+                ) =>
+            {
+                "managed_workspace_sign_in_required".to_string()
+            }
+            _ => "managed_workspace_unavailable".to_string(),
+        })?;
     session.access_token = token.access_token().secret().clone();
     if let Some(refresh) = token.refresh_token() {
         session.refresh_token = refresh.secret().clone();
@@ -244,7 +286,32 @@ async fn renew(
         SESSION_KEY,
         &serde_json::to_string(session)
             .map_err(|_| "Cannot encode Microsoft session".to_string())?,
-    )
+    )?;
+    Ok(true)
+}
+
+async fn verify_session(
+    state: &ManagedWorkspaceState,
+    config: &ManagedWorkspaceConfig,
+    session: &mut StoredSession,
+    keys: &Keys,
+    generation: u64,
+    token_client: login::MicrosoftClient,
+) -> Result<WorkspaceProfile, String> {
+    let renewed = renew(state, config, session, generation, &token_client, false).await?;
+    let client = http_client()?;
+    let mut result = profile(&client, config, session).await?;
+    if matches!(result, WorkspaceVerification::TokenRejected) && !renewed {
+        renew(state, config, session, generation, &token_client, true).await?;
+        result = profile(&client, config, session).await?;
+    }
+    match result {
+        WorkspaceVerification::Ready(profile) => Ok(profile),
+        WorkspaceVerification::EnrollmentRequired => {
+            enroll_session(state, config, session, keys, generation).await
+        }
+        WorkspaceVerification::TokenRejected => Err("managed_workspace_unavailable".into()),
+    }
 }
 
 #[tauri::command]
@@ -281,13 +348,22 @@ pub(crate) async fn managed_workspace_status(
     let Some(raw) = state.store(&config).load(SESSION_KEY)? else {
         return Ok(result);
     };
-    let mut session: StoredSession =
-        serde_json::from_str(&raw).map_err(|_| "Stored Microsoft session is invalid")?;
+    let mut session = decode_session(&raw)?;
     if !matches_context(&config, &session, &public_key) {
         return Ok(result);
     }
-    renew(&state, &config, &mut session, generation).await?;
-    result.profile = profile(&http_client()?, &config, &session).await?;
+    let token_client = login::client(&config, &session.redirect_uri)?;
+    result.profile = Some(
+        verify_session(
+            &state,
+            &config,
+            &mut session,
+            &keys,
+            generation,
+            token_client,
+        )
+        .await?,
+    );
     state.check_generation(generation)?;
     if app_state.signing_keys()?.public_key() != keys.public_key() {
         return Err("Buzz identity changed; sign in again".into());
@@ -296,20 +372,17 @@ pub(crate) async fn managed_workspace_status(
     Ok(result)
 }
 
-#[tauri::command]
-pub(crate) async fn managed_workspace_login(
-    app: tauri::AppHandle,
-    app_state: tauri::State<'_, AppState>,
-    state: tauri::State<'_, ManagedWorkspaceState>,
-) -> Result<ManagedWorkspaceStatus, String> {
-    let config = configuration()?.ok_or("Managed workspace is not configured")?;
-    let generation = state.generation.fetch_add(1, Ordering::AcqRel) + 1;
-    let keys = app_state.signing_keys()?;
+async fn enroll_session(
+    state: &ManagedWorkspaceState,
+    config: &ManagedWorkspaceConfig,
+    session: &StoredSession,
+    keys: &Keys,
+    generation: u64,
+) -> Result<WorkspaceProfile, String> {
     let public_key = keys.public_key().to_hex();
-    let session = login::interactive(&app, &state, public_key.clone(), generation).await?;
     state.check_generation(generation)?;
-    if app_state.signing_keys()?.public_key() != keys.public_key() {
-        return Err("Buzz identity changed; sign in again".into());
+    if !matches_context(config, session, &public_key) {
+        return Err("managed_workspace_session_recovery_required".into());
     }
     let client = http_client()?;
     let endpoint = format!("{}/v1/enrollment", config.base_url.trim_end_matches('/'));
@@ -338,7 +411,7 @@ pub(crate) async fn managed_workspace_login(
             Tag::parse(["challenge", challenge.challenge.as_str()])
                 .map_err(|_| "Invalid challenge tag")?,
         ])
-        .sign_with_keys(&keys)
+        .sign_with_keys(keys)
         .map_err(|_| "Cannot prove this Buzz identity".to_string())?;
     state.check_generation(generation)?;
     let response = client
@@ -351,11 +424,30 @@ pub(crate) async fn managed_workspace_login(
         .await
         .map_err(|_| "Workspace enrollment unavailable".to_string())?;
     if !response.status().is_success() {
-        return Err("Workspace enrollment is pending or denied; retry sign-in".into());
+        return Err("Workspace enrollment is pending or denied; retry".into());
     }
     let profile: WorkspaceProfile = response_json(response).await?;
-    validate_profile(&config, &profile)?;
+    validate_profile(config, &profile)?;
     state.check_generation(generation)?;
+    Ok(profile)
+}
+
+#[tauri::command]
+pub(crate) async fn managed_workspace_login(
+    app: tauri::AppHandle,
+    app_state: tauri::State<'_, AppState>,
+    state: tauri::State<'_, ManagedWorkspaceState>,
+) -> Result<ManagedWorkspaceStatus, String> {
+    let config = configuration()?.ok_or("Managed workspace is not configured")?;
+    let generation = state.generation.fetch_add(1, Ordering::AcqRel) + 1;
+    let keys = app_state.signing_keys()?;
+    let public_key = keys.public_key().to_hex();
+    let session = login::interactive(&app, &state, public_key.clone(), generation).await?;
+    state.check_generation(generation)?;
+    if app_state.signing_keys()?.public_key() != keys.public_key() {
+        return Err("Buzz identity changed; sign in again".into());
+    }
+    let profile = enroll_session(&state, &config, &session, &keys, generation).await?;
     profile::ensure_profile(&app_state, &keys, &profile).await?;
     let _refresh = state.refresh.lock().await;
     state.check_generation(generation)?;
@@ -393,61 +485,4 @@ pub(crate) fn cancel_managed_workspace_login(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn config() -> ManagedWorkspaceConfig {
-        ManagedWorkspaceConfig::parse(
-            &serde_json::json!({
-                "workspace_id": "fixture",
-                "tenant_id": "00000000-0000-4000-8000-000000000001",
-                "desktop_client_id": "00000000-0000-4000-8000-000000000002",
-                "api_client_id": "00000000-0000-4000-8000-000000000003",
-                "base_url": "https://workspace.example.invalid",
-                "relay_url": "wss://relay.example.invalid"
-            })
-            .to_string(),
-        )
-        .unwrap()
-    }
-
-    fn profile() -> WorkspaceProfile {
-        WorkspaceProfile {
-            workspace_name: "Fixture".into(),
-            display_name: None,
-            role: "member".into(),
-            relay_url: config().relay_url,
-            channels: Vec::new(),
-            credentials_included: false,
-            teams_message_sync: false,
-        }
-    }
-
-    #[test]
-    fn managed_response_cannot_change_the_compiled_relay_or_enable_content_sync() {
-        assert!(validate_profile(&config(), &profile()).is_ok());
-        for mutation in 0..5 {
-            let mut value = profile();
-            match mutation {
-                0 => value.relay_url = "wss://other.example.invalid".into(),
-                1 => value.credentials_included = true,
-                2 => value.teams_message_sync = true,
-                3 => value.role = "owner".into(),
-                _ => value.channels.push(WorkspaceChannel {
-                    id: "invalid".into(),
-                    name: None,
-                }),
-            }
-            assert!(validate_profile(&config(), &value).is_err());
-        }
-    }
-
-    #[test]
-    fn canceled_or_replaced_sign_in_cannot_commit_old_results() {
-        let state = ManagedWorkspaceState::default();
-        assert!(state.check_generation(0).is_ok());
-        state.generation.fetch_add(1, Ordering::AcqRel);
-        assert!(state.check_generation(0).is_err());
-        assert!(state.check_generation(1).is_ok());
-    }
-}
+mod tests;

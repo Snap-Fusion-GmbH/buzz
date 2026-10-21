@@ -26,6 +26,35 @@ localStorage. Enrollment proves possession of the individual's Nostr key.
 First login creates a profile from the verified work name only when a profile
 does not already exist. A locked keyring uses the existing recovery UI.
 
+## Session Recovery
+
+The enrollment gate checks workspace authorization every 15 seconds, with at
+most one verification in flight. A failed check blocks the workspace; it never
+falls back to an unmanaged relay or continues on cached authorization.
+
+Temporary transport, token-renewal, rate-limit and workspace-service failures
+retain the native Microsoft session and offer verification retry, not another
+interactive sign-in. Verification retries automatically. A workspace `401`
+triggers at most one silent token renewal before retrying the workspace request;
+a fresh token still rejected by the service remains a verification failure.
+A membership `403` is a separate access-denied state, not an expired login.
+An enrollment-required response instead repeats challenge/proof enrollment with
+the existing Microsoft session and the same Buzz identity, without a browser.
+The controller marks this with `X-Buzz-Workspace-State: enrollment-required`;
+the earlier API's exact missing-enrollment detail is also supported.
+
+Interactive sign-in is offered for a missing, mismatched or damaged Microsoft
+session, an explicit user retry of a failed login, or Microsoft's `invalid_grant`,
+`interaction_required`, `login_required` or `consent_required` response.
+Rotated refresh tokens are persisted in the existing workspace-scoped keyring.
+Cancellation and identity changes still fence stale verification results.
+
+The recovery tests use local HTTP token/workspace fixtures and a mocked OS
+keyring, plus a mock-bridge UI journey across the five-minute boundary, outages,
+membership denial, lost enrollment, automatic recovery and explicit
+reauthentication. Session recovery never resets the Buzz identity. These are
+not live Microsoft sign-in or tenant-policy acceptance.
+
 ## Relay Policy
 
 `BUZZ_MANAGED_ACCESS` is an optional strict JSON object containing the

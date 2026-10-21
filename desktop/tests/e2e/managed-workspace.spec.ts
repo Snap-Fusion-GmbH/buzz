@@ -119,16 +119,117 @@ test("verification outage stays blocked and offers a retry", async ({
     { skipCommunitySeed: true, skipOnboardingSeed: true },
   );
   await page.goto("/");
-  await expect(page.getByRole("alert")).toHaveText(
-    "Workspace verification is unavailable.",
+  await expect(page.getByRole("alert")).toContainText(
+    "Workspace verification is temporarily unavailable.",
   );
   await expect(
     page.getByRole("button", { name: "Retry verification" }),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Sign in with Microsoft" }),
-  ).toBeVisible();
+  ).toHaveCount(0);
   await expect(page.getByTestId("app-sidebar")).toHaveCount(0);
+  await waitForAnimations(page);
+  await page.screenshot({
+    path: "test-results/managed-workspace-verification-unavailable.png",
+  });
+});
+
+test("an existing session recovers from outages and denied access without another login", async ({
+  page,
+}) => {
+  await page.clock.install();
+  await installMockBridge(
+    page,
+    { managedWorkspace: { status: signedIn(), loginResult: signedIn() } },
+    {
+      skipCommunitySeed: true,
+      skipOnboardingSeed: true,
+      relayWsUrl: "wss://managed.example.invalid",
+    },
+  );
+  await page.goto("/");
+  await expect(page.getByTestId("app-sidebar")).toBeVisible();
+  await page.clock.fastForward(5 * 60_000);
+  await expect(page.getByTestId("managed-workspace-gate")).toHaveCount(0);
+
+  for (const reason of [
+    "managed_workspace_unavailable",
+    "managed_workspace_access_denied",
+  ]) {
+    await page.evaluate((message) => {
+      const managed = window.__BUZZ_E2E__?.mock?.managedWorkspace;
+      if (!managed) throw new Error("Managed workspace fixture is missing");
+      managed.statusError = message;
+    }, reason);
+    await page.clock.fastForward(15_000);
+    await expect(page.getByTestId("managed-workspace-gate")).toBeVisible();
+    await expect(page.getByTestId("app-sidebar")).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "Sign in with Microsoft" }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "Retry verification" }),
+    ).toBeVisible();
+    await expect(page.getByRole("alert")).toContainText(
+      reason === "managed_workspace_access_denied"
+        ? "Workspace access is not currently authorized."
+        : "Workspace verification is temporarily unavailable.",
+    );
+    await page.evaluate(() => {
+      const managed = window.__BUZZ_E2E__?.mock?.managedWorkspace;
+      if (!managed) throw new Error("Managed workspace fixture is missing");
+      delete managed.statusError;
+    });
+    await page.clock.fastForward(15_000);
+    await expect(page.getByTestId("app-sidebar")).toBeVisible();
+    await expect(page.getByTestId("managed-workspace-gate")).toHaveCount(0);
+  }
+
+  expect(
+    await page.evaluate(
+      () =>
+        window.__BUZZ_E2E_COMMANDS__?.filter(
+          (command) => command === "managed_workspace_login",
+        ).length ?? 0,
+    ),
+  ).toBe(0);
+  let logins = 0;
+  for (const [reason, message] of [
+    [
+      "managed_workspace_sign_in_required",
+      "Your Microsoft session needs you to sign in again.",
+    ],
+    [
+      "managed_workspace_session_recovery_required",
+      "The saved Microsoft session could not be read. Sign in again to replace it; your Buzz identity is unchanged.",
+    ],
+  ]) {
+    await page.evaluate((failure) => {
+      const managed = window.__BUZZ_E2E__?.mock?.managedWorkspace;
+      if (!managed) throw new Error("Managed workspace fixture is missing");
+      managed.statusError = failure;
+    }, reason);
+    await page.clock.fastForward(15_000);
+    await expect(page.getByRole("alert")).toHaveText(message);
+    await expect(page.getByTestId("app-sidebar")).toHaveCount(0);
+    await page.evaluate(() => {
+      const managed = window.__BUZZ_E2E__?.mock?.managedWorkspace;
+      if (!managed) throw new Error("Managed workspace fixture is missing");
+      delete managed.statusError;
+    });
+    await page.getByRole("button", { name: "Sign in with Microsoft" }).click();
+    await expect(page.getByTestId("app-sidebar")).toBeVisible();
+    logins += 1;
+    expect(
+      await page.evaluate(
+        () =>
+          window.__BUZZ_E2E_COMMANDS__?.filter(
+            (command) => command === "managed_workspace_login",
+          ).length ?? 0,
+      ),
+    ).toBe(logins);
+  }
 });
 
 test("locked system identity uses recovery without offering a replacement identity", async ({
