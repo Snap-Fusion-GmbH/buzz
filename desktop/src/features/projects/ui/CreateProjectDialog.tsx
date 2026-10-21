@@ -1,6 +1,8 @@
 import type { CreateProjectInput } from "@/features/projects/useCreateProject";
 import { Dialog } from "@/shared/ui/dialog";
 import { CreateProjectFormContent } from "./CreateProjectFormContent";
+import * as React from "react";
+import { GitHubImportForm } from "./GitHubImportForm";
 
 type CreateProjectDialogProps = {
   isCreating: boolean;
@@ -16,6 +18,10 @@ export function CreateProjectDialog({
   onOpenChange,
   open,
 }: CreateProjectDialogProps) {
+  const [github, setGitHub] = React.useState(false);
+  React.useEffect(() => {
+    if (open) setGitHub(false);
+  }, [open]);
   return (
     <Dialog
       onOpenChange={(nextOpen) => {
@@ -24,12 +30,23 @@ export function CreateProjectDialog({
       }}
       open={open}
     >
-      <CreateProjectFormContent
-        active={open}
-        isCreating={isCreating}
-        onCreate={onCreate}
-        onCreated={() => onOpenChange(false)}
-      />
+      {github ? (
+        <GitHubImportForm
+          active={open}
+          isCreating={isCreating}
+          onBack={() => setGitHub(false)}
+          onCreate={onCreate}
+          onCreated={() => onOpenChange(false)}
+        />
+      ) : (
+        <CreateProjectFormContent
+          active={open}
+          isCreating={isCreating}
+          onCreate={onCreate}
+          onCreated={() => onOpenChange(false)}
+          onChooseGitHub={() => setGitHub(true)}
+        />
+      )}
     </Dialog>
   );
 }

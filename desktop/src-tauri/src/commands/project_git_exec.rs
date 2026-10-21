@@ -4,11 +4,14 @@
 //! the identity nsec is handed to `git-credential-nostr` via environment
 //! variables so nothing key-related ever touches disk or global git config.
 
-use crate::{app_state::AppState, managed_agents::resolve_command};
+use crate::{
+    app_state::AppState,
+    github_access,
+    managed_agents::{output_with_limit, resolve_command},
+};
 use nostr::{Keys, ToBech32};
-use std::io::Read;
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Command;
+use std::time::Duration;
 use url::Url;
 
 /// Wall-clock cap for a single git invocation. Remote operations talk to
@@ -16,6 +19,10 @@ use url::Url;
 /// `spawn_blocking` threads indefinitely.
 const LOCAL_GIT_TIMEOUT: Duration = Duration::from_secs(60);
 const REMOTE_GIT_TIMEOUT: Duration = Duration::from_secs(300);
+
+#[cfg(all(test, unix))]
+#[path = "project_git_exec_live_tests.rs"]
+mod live_tests;
 
 fn git_subcommand<'a>(args: &'a [&str]) -> Option<&'a str> {
     let mut index = 0;
@@ -47,17 +54,9 @@ fn git_needs_credentials(args: &[&str]) -> bool {
 pub(crate) struct GitAuthConfig {
     git_path: std::path::PathBuf,
     credential_helper: Option<std::path::PathBuf>,
+    github_entries: Vec<(String, String)>,
     nsec: String,
     allow_file_transport: bool,
-}
-
-fn read_pipe_lossy(pipe: Option<impl Read>) -> String {
-    let Some(mut pipe) = pipe else {
-        return String::new();
-    };
-    let mut bytes = Vec::new();
-    let _ = pipe.read_to_end(&mut bytes);
-    String::from_utf8_lossy(&bytes).to_string()
 }
 
 pub(crate) fn run_git(
@@ -71,64 +70,30 @@ pub(crate) fn run_git(
         command.current_dir(cwd);
     }
     let needs_credentials = git_needs_credentials(args);
-    let timeout = if needs_credentials {
+    let timeout = if needs_credentials || !auth.github_entries.is_empty() {
         REMOTE_GIT_TIMEOUT
     } else {
         LOCAL_GIT_TIMEOUT
     };
     configure_git_auth(&mut command, auth, needs_credentials);
-    command.stdin(Stdio::null());
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::piped());
-    crate::util::configure_no_window(&mut command);
-
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("failed to run git: {error}"))?;
-
-    // Drain the pipes on background threads so a chatty git process can't
-    // deadlock on a full pipe while we poll for exit below.
-    let stdout_pipe = child.stdout.take();
-    let stderr_pipe = child.stderr.take();
-    let stdout_thread = std::thread::spawn(move || read_pipe_lossy(stdout_pipe));
-    let stderr_thread = std::thread::spawn(move || read_pipe_lossy(stderr_pipe));
-
-    let started = Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {
-                if started.elapsed() > timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    let _ = stdout_thread.join();
-                    let _ = stderr_thread.join();
-                    return Err(format!("git timed out after {}s", timeout.as_secs()));
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("failed to wait for git: {error}"));
-            }
-        }
-    };
-
-    let stdout = stdout_thread.join().unwrap_or_default();
-    let stderr = stderr_thread.join().unwrap_or_default();
-    if !status.success() {
-        let stderr = stderr.trim().to_string();
+    let output = output_with_limit(command, timeout, 16 * 1024 * 1024)
+        .ok_or_else(|| "Git failed, timed out, or exceeded its output limit".to_string())?;
+    if !output.status.success() {
+        let stderr = crate::managed_agents::redact_secrets_with(
+            String::from_utf8_lossy(&output.stderr).trim(),
+            &[auth.nsec.as_str()],
+        );
         return Err(if stderr.is_empty() {
-            format!("git exited with status {status}")
+            format!("git exited with status {}", output.status)
         } else {
             stderr
         });
     }
-    Ok(stdout)
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 fn configure_git_auth(command: &mut Command, auth: &GitAuthConfig, needs_credentials: bool) {
+    github_access::sanitize_environment(command);
     command.env("GIT_TERMINAL_PROMPT", "0");
     command.env("GIT_CONFIG_NOSYSTEM", "1");
     for key in [
@@ -150,16 +115,16 @@ fn configure_git_auth(command: &mut Command, auth: &GitAuthConfig, needs_credent
     // repo-local hooks — every process git spawns inherits our environment
     // (including NOSTR_PRIVATE_KEY below), and a cloned repository's hooks
     // must never run with the identity key in reach.
-    let mut entries: Vec<(&str, String)> = vec![
-        ("credential.helper", String::new()),
-        ("core.hooksPath", "/dev/null".to_string()),
-        ("core.fsmonitor", "false".to_string()),
-        ("protocol.allow", "never".to_string()),
-        ("protocol.http.allow", "always".to_string()),
-        ("protocol.https.allow", "always".to_string()),
-        ("protocol.ext.allow", "never".to_string()),
+    let mut entries: Vec<(String, String)> = vec![
+        ("credential.helper".into(), String::new()),
+        ("core.hooksPath".into(), "/dev/null".to_string()),
+        ("core.fsmonitor".into(), "false".to_string()),
+        ("protocol.allow".into(), "never".to_string()),
+        ("protocol.http.allow".into(), "always".to_string()),
+        ("protocol.https.allow".into(), "always".to_string()),
+        ("protocol.ext.allow".into(), "never".to_string()),
         (
-            "protocol.file.allow",
+            "protocol.file.allow".into(),
             if auth.allow_file_transport {
                 "always"
             } else {
@@ -168,16 +133,20 @@ fn configure_git_auth(command: &mut Command, auth: &GitAuthConfig, needs_credent
             .to_string(),
         ),
     ];
-    if needs_credentials {
+    // Promisor reads such as `show` may fetch cold blobs. The scoped helper is
+    // safe on local operations too: it contains no token or Buzz identity key.
+    if !auth.github_entries.is_empty() {
+        entries.extend_from_slice(&auth.github_entries);
+    } else if needs_credentials {
         let Some(cred_helper) = &auth.credential_helper else {
             return apply_git_config(command, &entries);
         };
         command.env("NOSTR_PRIVATE_KEY", &auth.nsec);
         entries.push((
-            "credential.helper",
+            "credential.helper".into(),
             credential_helper_config_value(cred_helper),
         ));
-        entries.push(("credential.useHttpPath", "true".to_string()));
+        entries.push(("credential.useHttpPath".into(), "true".to_string()));
     }
     apply_git_config(command, &entries);
 }
@@ -190,7 +159,7 @@ fn credential_helper_config_value(path: &std::path::Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
-fn apply_git_config(command: &mut Command, entries: &[(&str, String)]) {
+fn apply_git_config(command: &mut Command, entries: &[(String, String)]) {
     command.env("GIT_CONFIG_COUNT", entries.len().to_string());
     for (index, (key, value)) in entries.iter().enumerate() {
         command.env(format!("GIT_CONFIG_KEY_{index}"), key);
@@ -207,16 +176,29 @@ pub(crate) fn build_git_clone_auth_config(
     clone_url: &str,
     state: &AppState,
 ) -> Result<GitAuthConfig, String> {
+    validate_local_clone_url_for_workspace(clone_url, state)?;
     if validate_github_clone_url(clone_url).is_ok() {
-        return Ok(GitAuthConfig {
-            git_path: resolve_command("git")
-                .ok_or_else(|| "git was not found on PATH".to_string())?,
-            credential_helper: None,
-            nsec: String::new(),
-            allow_file_transport: false,
-        });
+        github_access::validate_workspace(state)?;
+        github_access::validate_repository(clone_url)?;
+        return build_github_auth_config(clone_url, github_access::resolve_cli().as_deref());
     }
     build_git_auth_config(state)
+}
+
+fn build_github_auth_config(
+    clone_url: &str,
+    gh: Option<&std::path::Path>,
+) -> Result<GitAuthConfig, String> {
+    github_access::repository_url(clone_url)?;
+    Ok(GitAuthConfig {
+        git_path: resolve_command("git").ok_or_else(|| "git was not found on PATH".to_string())?,
+        credential_helper: None,
+        github_entries: gh
+            .map(|path| github_access::credential_entries(clone_url, path))
+            .unwrap_or_default(),
+        nsec: String::new(),
+        allow_file_transport: false,
+    })
 }
 
 pub(crate) fn build_git_auth_config_for_keys(keys: &Keys) -> Result<GitAuthConfig, String> {
@@ -229,6 +211,7 @@ pub(crate) fn build_git_auth_config_for_keys(keys: &Keys) -> Result<GitAuthConfi
     Ok(GitAuthConfig {
         git_path,
         credential_helper,
+        github_entries: Vec::new(),
         nsec,
         allow_file_transport: false,
     })
@@ -305,43 +288,14 @@ pub(crate) fn validate_clone_url(clone_url: &str) -> Result<(), String> {
 }
 
 fn validate_github_clone_url(clone_url: &str) -> Result<(), String> {
-    let parsed = Url::parse(clone_url).map_err(|error| format!("invalid clone URL: {error}"))?;
-    if parsed.scheme() != "https"
-        || parsed.host_str() != Some("github.com")
-        || parsed.port().is_some()
-        || !parsed.username().is_empty()
-        || parsed.password().is_some()
-        || parsed.query().is_some()
-        || parsed.fragment().is_some()
-    {
-        return Err("GitHub clone URL must use public https://github.com/owner/repository".into());
-    }
-    let segments = parsed
-        .path_segments()
-        .map(|segments| {
-            segments
-                .filter(|segment| !segment.is_empty())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let valid_segment = |segment: &&str| {
-        !segment.starts_with('-')
-            && !segment.contains("..")
-            && segment.chars().all(|character| {
-                character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
-            })
-    };
-    if segments.len() != 2 || !segments.iter().all(valid_segment) {
-        return Err("GitHub clone URL must name one owner and repository".into());
-    }
-    Ok(())
+    github_access::repository_url(clone_url).map(|_| ())
 }
 
 pub(crate) fn validate_local_clone_url(clone_url: &str) -> Result<(), String> {
     if validate_clone_url(clone_url).is_ok() || validate_github_clone_url(clone_url).is_ok() {
         return Ok(());
     }
-    Err("clone URL must point at a Buzz repository or public GitHub repository".into())
+    Err("clone URL must point at a Buzz repository or HTTPS GitHub repository".into())
 }
 
 pub(crate) fn validate_local_clone_url_for_workspace(
@@ -349,7 +303,8 @@ pub(crate) fn validate_local_clone_url_for_workspace(
     state: &AppState,
 ) -> Result<(), String> {
     if validate_github_clone_url(clone_url).is_ok() {
-        return Ok(());
+        github_access::validate_workspace(state)?;
+        return github_access::validate_repository(clone_url);
     }
     validate_workspace_clone_url(clone_url, state)
 }
@@ -397,6 +352,167 @@ mod tests {
         git_subcommand, validate_clone_url, validate_clone_url_against_relay,
         validate_local_clone_url,
     };
+
+    #[test]
+    fn github_auth_uses_only_the_exact_repository_helper_without_a_buzz_key() {
+        let url = "https://github.com/Snap-Fusion-GmbH/private.git";
+        let gh = std::path::Path::new("/opt/Git Hub/gh");
+        let auth = super::build_github_auth_config(url, Some(gh)).expect("GitHub config");
+        assert!(auth.nsec.is_empty());
+        assert!(auth.credential_helper.is_none());
+        let mut command = std::process::Command::new("git");
+        for name in [
+            "NOSTR_PRIVATE_KEY",
+            "BUZZ_PRIVATE_KEY",
+            "BUZZ_AUTH_TAG",
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "GIT_CONFIG_PARAMETERS",
+            "GIT_TRACE_CURL",
+        ] {
+            command.env(name, "fixture-secret");
+        }
+        super::configure_git_auth(&mut command, &auth, true);
+        let environment: std::collections::HashMap<_, _> = command
+            .get_envs()
+            .map(|(name, value)| {
+                (
+                    name.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+        for name in [
+            "NOSTR_PRIVATE_KEY",
+            "BUZZ_PRIVATE_KEY",
+            "BUZZ_AUTH_TAG",
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "GIT_CONFIG_PARAMETERS",
+            "GIT_TRACE_CURL",
+        ] {
+            assert_eq!(environment.get(name), Some(&None), "{name} must be removed");
+        }
+        let helper = super::run_git(
+            &["config", "--get-urlmatch", "credential.helper", url],
+            None,
+            &auth,
+        )
+        .expect("scoped helper");
+        assert_eq!(helper.trim(), "!'/opt/Git Hub/gh' auth git-credential");
+        for unrelated in [
+            "https://github.com/Snap-Fusion-GmbH/another.git",
+            "https://github.com/Snap-Fusion-GmbH/private.git-other",
+            "https://github.com.evil.test/Snap-Fusion-GmbH/private.git",
+        ] {
+            let helper = super::run_git(
+                &["config", "--get-urlmatch", "credential.helper", unrelated],
+                None,
+                &auth,
+            )
+            .unwrap_or_default();
+            assert!(
+                helper.trim().is_empty(),
+                "credentials must not match {unrelated}"
+            );
+        }
+        assert_eq!(
+            super::run_git(
+                &["config", "--get-urlmatch", "http.followRedirects", url],
+                None,
+                &auth
+            )
+            .expect("redirect policy")
+            .trim(),
+            "false"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn push_keeps_the_checked_commit_when_another_process_advances_head() {
+        use std::os::unix::fs::PermissionsExt;
+        let mut auth = super::build_test_git_auth_config().expect("git config");
+        let root = tempfile::tempdir().expect("fixture");
+        let remote = root.path().join("remote.git");
+        let checkout = root.path().join("checkout");
+        super::run_git(
+            &["init", "--bare", "--", remote.to_str().expect("path")],
+            None,
+            &auth,
+        )
+        .expect("remote");
+        super::run_git(
+            &[
+                "init",
+                "--initial-branch=main",
+                "--",
+                checkout.to_str().expect("path"),
+            ],
+            None,
+            &auth,
+        )
+        .expect("checkout");
+        super::run_git(
+            &[
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "Checked commit",
+            ],
+            Some(&checkout),
+            &auth,
+        )
+        .expect("commit");
+        super::run_git(
+            &["remote", "add", "origin", remote.to_str().expect("path")],
+            Some(&checkout),
+            &auth,
+        )
+        .expect("origin");
+        let expected = super::run_git(&["rev-parse", "HEAD"], Some(&checkout), &auth)
+            .expect("head")
+            .trim()
+            .to_string();
+        let git = crate::github_access::shell_quote(&auth.git_path.to_string_lossy());
+        let proxy = root.path().join("git-proxy");
+        std::fs::write(&proxy, format!(
+            "#!/bin/sh\nset -eu\nif [ \"$1\" = push ]; then\n{git} -c user.name=Fixture -c user.email=fixture@example.invalid commit --allow-empty -m 'Concurrent commit' >/dev/null\nfi\nexec {git} \"$@\"\n"
+        )).expect("proxy");
+        std::fs::set_permissions(&proxy, std::fs::Permissions::from_mode(0o700))
+            .expect("executable");
+        auth.git_path = proxy;
+        let result = crate::commands::project_git_push::push_project_local_repository_blocking(
+            &checkout,
+            remote.to_string_lossy().into_owned(),
+            Some("main".into()),
+            None,
+            &auth,
+        )
+        .expect("push checked snapshot");
+        assert_eq!(result.commit, expected);
+        let actual = super::run_git(
+            &[
+                "ls-remote",
+                remote.to_str().expect("path"),
+                "refs/heads/main",
+            ],
+            None,
+            &auth,
+        )
+        .expect("remote readback");
+        assert!(
+            actual.starts_with(&expected),
+            "push must not send the concurrently advanced HEAD"
+        );
+        let head =
+            super::run_git(&["rev-parse", "HEAD"], Some(&checkout), &auth).expect("new head");
+        assert_ne!(head.trim(), expected, "the race must actually advance HEAD");
+    }
 
     #[test]
     fn credential_helper_config_value_uses_forward_slashes() {

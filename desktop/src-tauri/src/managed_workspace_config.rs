@@ -10,6 +10,9 @@ pub struct ManagedWorkspaceConfig {
     pub api_client_id: String,
     pub base_url: String,
     pub relay_url: String,
+    /// Restrict managed per-user GitHub operations to this organization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_organization: Option<String>,
 }
 
 impl ManagedWorkspaceConfig {
@@ -33,6 +36,19 @@ impl ManagedWorkspaceConfig {
         ] {
             uuid::Uuid::parse_str(identifier)
                 .map_err(|_| "Managed workspace identity is invalid".to_string())?;
+        }
+        if let Some(organization) = value.github_organization.as_deref() {
+            if organization.is_empty()
+                || organization.len() > 39
+                || organization.starts_with('-')
+                || organization.ends_with('-')
+                || organization.contains("--")
+                || !organization
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            {
+                return Err("Managed GitHub organization is invalid".into());
+            }
         }
         for (raw_url, scheme) in [(&value.base_url, "https"), (&value.relay_url, "wss")] {
             let parsed = url::Url::parse(raw_url)

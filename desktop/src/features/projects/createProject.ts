@@ -25,7 +25,14 @@ import {
   KIND_PROJECT_ANNOUNCEMENT,
   KIND_REPO_ANNOUNCEMENT,
 } from "@/shared/constants/kinds";
-import { getCachedRelayOrigin } from "@/shared/lib/mediaUrl";
+import {
+  getCachedRelayOrigin,
+  getRelayOriginGeneration,
+} from "@/shared/lib/mediaUrl";
+import {
+  getGitHubRepository,
+  type GitHubRepository,
+} from "@/shared/api/github";
 
 export type CreateProjectInput = {
   name: string;
@@ -34,6 +41,8 @@ export type CreateProjectInput = {
   projectVisibility?: ProjectListingVisibility;
   agents?: readonly CreateChannelManagedAgentInput[];
   templateId?: string;
+  githubRepository?: GitHubRepository;
+  shareGitHubMetadata?: boolean;
 };
 
 export type CreateProjectResult = {
@@ -48,6 +57,8 @@ export type CreateProjectResumeState = {
   projectIds: Set<string>;
 };
 
+type CheckProjectScope = (() => Promise<void>) | undefined;
+
 function formatAgentFailures(
   failures: ReadonlyArray<{ name: string; error: string }>,
 ) {
@@ -60,7 +71,11 @@ function formatAgentFailures(
     .join("; ")}`;
 }
 
-async function publishProjectEvent(event: RelayEvent) {
+async function publishProjectEvent(
+  event: RelayEvent,
+  checkScope?: CheckProjectScope,
+) {
+  await checkScope?.();
   try {
     await relayClient.publishEvent(
       event,
@@ -77,7 +92,11 @@ async function publishProjectEvent(event: RelayEvent) {
   }
 }
 
-async function publishRepositoryEvent(event: RelayEvent) {
+async function publishRepositoryEvent(
+  event: RelayEvent,
+  checkScope?: CheckProjectScope,
+) {
+  await checkScope?.();
   await relayClient.publishEvent(
     event,
     "Timed out creating the project repository.",
@@ -93,6 +112,7 @@ function readCreatedProject(
     projectEvents: [projectEvent],
     repositoryEvents: repositoryEvent ? [repositoryEvent] : [],
     relayOrigin: getCachedRelayOrigin(),
+    viewerPubkey: projectEvent.pubkey,
   });
   if (!project) {
     throw new Error("The project was created but could not be read.");
@@ -130,17 +150,20 @@ async function ensureDefaultRepository({
   input,
   ownerPubkey,
   project,
+  checkScope,
 }: {
   channelId: string;
   input: CreateProjectInput;
   ownerPubkey: string;
   project: Project;
+  checkScope: CheckProjectScope;
 }): Promise<Project> {
   const repositoryTemplate = buildDefaultProjectRepositoryTemplate({
     description: input.description,
     name: input.name,
     ownerPubkey,
     projectChannelId: channelId,
+    githubRepository: input.githubRepository,
   });
   const existingRepository =
     project.repositories.find(
@@ -155,8 +178,9 @@ async function ensureDefaultRepository({
     repositoryTemplate.dtag,
   );
   if (!repositoryEvent) {
+    await checkScope?.();
     repositoryEvent = await signRelayEvent(repositoryTemplate.repository);
-    await publishRepositoryEvent(repositoryEvent);
+    await publishRepositoryEvent(repositoryEvent, checkScope);
   }
 
   if (
@@ -194,8 +218,9 @@ async function ensureDefaultRepository({
       ]),
     ].sort(),
   });
+  await checkScope?.();
   const projectEvent = await signRelayEvent(patched);
-  await publishProjectEvent(projectEvent);
+  await publishProjectEvent(projectEvent, checkScope);
   return readCreatedProject(projectEvent, repositoryEvent);
 }
 
@@ -205,10 +230,13 @@ async function finishCreate(
   input: CreateProjectInput,
   resume: CreateProjectResumeState,
   projectId: string,
+  checkScope: CheckProjectScope,
 ): Promise<CreateProjectResult> {
+  await checkScope?.();
   const agentChannelId = channel?.id ?? project.projectChannelId;
   if (agentChannelId && input.agents && input.agents.length > 0) {
     await addRequestedAgents(agentChannelId, input.agents);
+    await checkScope?.();
   }
   resume.projectIds.delete(projectId);
   resume.channels.delete(projectId);
@@ -220,12 +248,49 @@ export async function createProject(
   input: CreateProjectInput,
   resume: CreateProjectResumeState,
 ): Promise<CreateProjectResult> {
+  if (input.githubRepository && !input.shareGitHubMetadata) {
+    throw new Error(
+      "Confirm sharing the repository name and link before adding it.",
+    );
+  }
+  const initialRelay = getCachedRelayOrigin();
+  const initialGeneration = getRelayOriginGeneration();
   const identity = await getIdentity();
+  const checkScope: CheckProjectScope = input.githubRepository
+    ? async () => {
+        const currentIdentity = await getIdentity();
+        if (
+          getRelayOriginGeneration() !== initialGeneration ||
+          getCachedRelayOrigin() !== initialRelay ||
+          currentIdentity.pubkey !== identity.pubkey
+        ) {
+          throw new Error(
+            "The active workspace changed. Retry from the current workspace.",
+          );
+        }
+      }
+    : undefined;
+  if (input.githubRepository) {
+    const repository = await getGitHubRepository(
+      input.githubRepository.cloneUrl,
+    );
+    await checkScope?.();
+    if (
+      repository.id !== input.githubRepository.id ||
+      repository.cloneUrl !== input.githubRepository.cloneUrl ||
+      repository.fullName !== input.githubRepository.fullName
+    ) {
+      throw new Error("The GitHub repository changed. Select it again.");
+    }
+    input = { ...input, githubRepository: repository };
+  }
+  const githubCloneUrl = input.githubRepository?.cloneUrl;
   const dtagPreview = projectDtagFromName(input.name);
   if (!dtagPreview) {
     throw new Error("Project name must include letters or numbers.");
   }
   const existing = await fetchProjects();
+  await checkScope?.();
   const ownerPubkey = identity.pubkey.toLowerCase();
   const existingProject = existing.find(
     (project) =>
@@ -235,6 +300,14 @@ export async function createProject(
   const projectId = `${ownerPubkey}:${dtagPreview}`;
   const canResume = resume.projectIds.has(projectId);
   if (existingProject && !canResume) {
+    if (
+      githubCloneUrl &&
+      existingProject.repositories.some((repository) =>
+        repository.cloneUrls.includes(githubCloneUrl),
+      )
+    ) {
+      return { channel: null, project: existingProject };
+    }
     throw new Error(`You already have a project named "${dtagPreview}".`);
   }
   if (existingProject && !existingProject.legacy) {
@@ -247,9 +320,17 @@ export async function createProject(
           input,
           ownerPubkey,
           project: existingProject,
+          checkScope,
         })
       : existingProject;
-    return finishCreate(cachedChannel, project, input, resume, projectId);
+    return finishCreate(
+      cachedChannel,
+      project,
+      input,
+      resume,
+      projectId,
+      checkScope,
+    );
   }
   const conflict = conflictingListedProject(existing, {
     dtag: dtagPreview,
@@ -262,6 +343,22 @@ export async function createProject(
     );
   }
 
+  if (githubCloneUrl) {
+    const repositoryHead = await fetchOwnHead(
+      KIND_REPO_ANNOUNCEMENT,
+      ownerPubkey,
+      dtagPreview,
+    );
+    if (
+      repositoryHead &&
+      !repositoryHead.tags.some(
+        (tag) => tag[0] === "clone" && tag.slice(1).includes(githubCloneUrl),
+      )
+    ) {
+      throw new Error("A different repository already uses this project name.");
+    }
+  }
+  await checkScope?.();
   resume.projectIds.add(projectId);
   let channel = resume.channels.get(projectId);
   if (!channel) {
@@ -280,21 +377,24 @@ export async function createProject(
     ownerPubkey: identity.pubkey,
     projectChannelId: channel.id,
     projectVisibility: input.projectVisibility ?? "listed",
+    githubRepository: input.githubRepository,
   });
   const existingRepositoryEvent = await fetchOwnHead(
     KIND_REPO_ANNOUNCEMENT,
     ownerPubkey,
     templates.dtag,
   );
+  await checkScope?.();
   const projectEvent = await signRelayEvent(templates.project);
-  await publishProjectEvent(projectEvent);
+  await publishProjectEvent(projectEvent, checkScope);
 
   let repositoryEvent = existingRepositoryEvent;
   if (!repositoryEvent) {
+    await checkScope?.();
     repositoryEvent = await signRelayEvent(templates.repository);
-    await publishRepositoryEvent(repositoryEvent);
+    await publishRepositoryEvent(repositoryEvent, checkScope);
   }
 
   const project = readCreatedProject(projectEvent, repositoryEvent);
-  return finishCreate(channel, project, input, resume, projectId);
+  return finishCreate(channel, project, input, resume, projectId, checkScope);
 }

@@ -10,6 +10,9 @@ mod deep_link;
 mod egress_guard;
 mod event_sync;
 mod events;
+mod github_access;
+#[doc(hidden)]
+pub use github_access::print_github_organization_probe_if_requested;
 #[cfg_attr(not(test), allow(dead_code))]
 mod hpke_key_backup;
 mod huddle;
@@ -728,6 +731,11 @@ pub fn run() {
             get_agent_models,
             discover_agent_models,
             agent_access_owner_only,
+            get_github_access_status,
+            connect_github_account,
+            get_github_repository_state,
+            list_github_repositories,
+            get_github_repository,
             get_agent_config_surface,
             get_runtime_file_config,
             get_baked_build_env_keys,

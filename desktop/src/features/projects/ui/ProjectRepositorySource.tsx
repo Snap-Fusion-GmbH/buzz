@@ -186,6 +186,7 @@ export type RepoSourceHeaderControls = {
   localPath?: string | null;
   remoteLabel: string;
   remoteKind?: "buzz" | "external";
+  supportsGitSync?: boolean;
   remoteUnavailableReason?: ProjectRepoUnavailableReason;
   externalUrl?: string | null;
   /** Opens repository-scoped assistance when remote access is restricted. */
@@ -322,7 +323,7 @@ export function RepoSyncActionButton({
     controls.externalUrl,
     controls.selectedTag ?? controls.branch,
   );
-  if (controls.remoteKind === "external") {
+  if (controls.remoteKind === "external" && !controls.supportsGitSync) {
     return externalOpenUrl ? (
       <Button
         asChild

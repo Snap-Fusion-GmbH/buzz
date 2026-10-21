@@ -108,6 +108,9 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
   }, [projectId, repositoryId]);
   const repository = selectProjectRepository(project, routeRepositoryId);
   const repoRemote = useProjectRepoPresentation(repository);
+  const isGitHubRemote =
+    repoRemote.host.kind === "external" &&
+    repoRemote.host.host === "github.com";
   const { applyPatch: applyRepositorySearch } = useHistorySearchState(
     PROJECT_REPOSITORY_SEARCH_KEYS,
   );
@@ -220,6 +223,7 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
     activeRepoPullRequest,
     activeTag,
     isBuzzHost: repoRemote.host.kind === "buzz",
+    isGitHubHost: isGitHubRemote,
     repository,
     reposDir: activeCommunity?.reposDir,
     repoSource,
@@ -331,6 +335,10 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
     ]);
     const error = results.find((result) => result.error)?.error;
     if (error) {
+      if (isGitHubRemote) {
+        showProjectCloneErrorToast(error, repository?.cloneUrls[0]);
+        return;
+      }
       const reason = refineRepoUnavailableReason({
         reason: projectRepoUnavailableReason(error),
         repositoryChannelId: repository?.channelId,
@@ -344,11 +352,13 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
     }
     toast.success("Remote state refreshed.");
   }, [
+    isGitHubRemote,
     memberChannelIds,
     repoSnapshotQuery,
     repoStateQuery,
     repoSyncStatusQuery,
     repository?.channelId,
+    repository?.cloneUrls[0],
   ]);
   const cloneBlockedByRemote =
     remoteUnavailableReason !== undefined &&
@@ -457,7 +467,11 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
       if (repoSource !== "remote") setRepoSource("remote");
       return;
     }
-    if (repoSource === "local" && !hasLocalCheckout) {
+    if (
+      repoSource === "local" &&
+      !hasLocalCheckout &&
+      localRepoSnapshotQuery.isSuccess
+    ) {
       setRepoSource("remote");
       return;
     }
@@ -472,6 +486,7 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
   }, [
     displayedRepoSnapshot,
     hasLocalCheckout,
+    localRepoSnapshotQuery.isSuccess,
     repoSource,
     selectedPullRequestId,
     selectedTag,

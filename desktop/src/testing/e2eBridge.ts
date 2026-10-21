@@ -39,6 +39,11 @@ import {
   hasMockSubscription,
 } from "./e2eBridgeSubscriptions.ts";
 import { installMockHuddleCameraOwner } from "./e2eBridgeHuddleCamera.ts";
+import {
+  handleMockGitHub,
+  mockGitHubSnapshot,
+  recordMockGitHubPush,
+} from "./e2eBridgeGitHub";
 export { mockSearchHitMatches };
 import type { ConnectionState } from "@/shared/api/relayClientShared";
 import type {
@@ -13010,7 +13015,24 @@ export function maybeInstallE2eTauriMocks() {
         // Matches the synthetic human author on a mock snapshot commit so the
         // viewer-identity avatar attribution is exercised in e2e.
         return { name: "Avery E", email: "avery@example.com" };
-      case "get_project_repo_snapshot":
+      case "get_github_access_status":
+      case "connect_github_account":
+      case "list_github_repositories":
+      case "get_github_repository":
+        return handleMockGitHub(command, payload);
+      case "get_github_repository_state": {
+        const seed = MOCK_PROJECT_SEEDS.find(
+          (repository) =>
+            repository.cloneUrl ===
+            (payload as { cloneUrl?: string } | undefined)?.cloneUrl,
+        );
+        return handleMockGitHub(
+          command,
+          payload,
+          seed ? readMockProjectBranches()[seed.dtag] : undefined,
+        );
+      }
+      case "get_project_repo_snapshot": {
         if (activeConfig?.mock?.projectRepoSnapshotDelayMs) {
           await new Promise((resolve) =>
             window.setTimeout(
@@ -13022,6 +13044,10 @@ export function maybeInstallE2eTauriMocks() {
         if (activeConfig?.mock?.projectRepoSnapshotError) {
           throw new Error(activeConfig.mock.projectRepoSnapshotError);
         }
+        const github = mockGitHubSnapshot(
+          (payload as { cloneUrl?: string } | undefined)?.cloneUrl,
+        );
+        if (github) return github;
         return {
           latest_commit: {
             hash: "0123456789abcdef0123456789abcdef01234567",
@@ -13116,6 +13142,7 @@ export function maybeInstallE2eTauriMocks() {
             },
           ],
         };
+      }
       case "get_project_local_repo_snapshot":
         return window.__BUZZ_E2E_PROJECT_LOCAL_REPO_SNAPSHOT__ ?? null;
       case "get_project_repo_file_content":
@@ -13202,11 +13229,15 @@ export function maybeInstallE2eTauriMocks() {
       case "open_project_repository_folder":
         return null;
       case "push_project_local_repository": {
-        const input = payload as { branchName?: string | null };
+        const input = payload as {
+          branchName?: string | null;
+          cloneUrl?: string;
+        };
         const status = window.__BUZZ_E2E_PROJECT_REPO_SYNC_STATUS__;
         const branch = input.branchName ?? status?.remote_branch ?? "main";
         const commit =
           status?.local_head ?? "0123456789abcdef0123456789abcdef01234567";
+        recordMockGitHubPush(input.cloneUrl, commit);
         if (status) {
           status.remote_branch = branch;
           status.remote_head = commit;

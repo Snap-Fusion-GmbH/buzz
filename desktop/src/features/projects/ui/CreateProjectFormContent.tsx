@@ -1,4 +1,5 @@
 import { ArrowLeft } from "lucide-react";
+import { GitHubMark } from "./GitHubMark";
 import * as React from "react";
 
 import type { CreateProjectInput } from "@/features/projects/useCreateProject";
@@ -24,6 +25,7 @@ export function CreateProjectFormContent({
   onBack,
   onCreate,
   onCreated,
+  onChooseGitHub,
 }: {
   active: boolean;
   initialName?: string;
@@ -31,6 +33,7 @@ export function CreateProjectFormContent({
   onBack?: () => void;
   onCreate: (input: CreateProjectInput) => Promise<void>;
   onCreated: () => void;
+  onChooseGitHub?: () => void;
 }) {
   const [name, setName] = React.useState("");
   const [description, setDescription] = React.useState("");
@@ -81,6 +84,17 @@ export function CreateProjectFormContent({
       headerSubtitle="A project starts as a channel with a repository. People in the channel can talk, clone, and open tasks here."
       footer={
         <div className="flex w-full items-center justify-end gap-3">
+          {onChooseGitHub ? (
+            <Button
+              disabled={isCreating}
+              onClick={onChooseGitHub}
+              type="button"
+              variant="ghost"
+            >
+              <GitHubMark aria-hidden="true" className="h-4 w-4" />
+              Add from GitHub
+            </Button>
+          ) : null}
           <Button
             data-testid="create-project-submit"
             disabled={isCreating || name.trim().length === 0}

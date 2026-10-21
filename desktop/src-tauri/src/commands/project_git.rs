@@ -1,6 +1,6 @@
 use super::project_git_exec::{
-    build_git_auth_config, clean_branch, clean_target_ref, run_git, validate_workspace_clone_url,
-    GitAuthConfig,
+    build_git_auth_config, build_git_clone_auth_config, clean_branch, clean_target_ref, run_git,
+    validate_local_clone_url_for_workspace, GitAuthConfig,
 };
 use super::project_git_file_content::{checkout_project_repo, read_preview_content};
 use super::project_git_push::push_project_local_repository_blocking;
@@ -413,7 +413,7 @@ pub(crate) fn compare_local_remote_status(
     branch_name: Option<&str>,
     base_branch: Option<&str>,
     auth: &GitAuthConfig,
-) -> ProjectRepoSyncStatusInfo {
+) -> Result<ProjectRepoSyncStatusInfo, String> {
     let local_branch = run_git(&["branch", "--show-current"], Some(repo_dir), auth)
         .ok()
         .and_then(|output| first_output_line(&output));
@@ -449,12 +449,28 @@ pub(crate) fn compare_local_remote_status(
         .ok()
         .and_then(|output| first_output_line(&output));
     if current_origin.as_deref() != Some(clone_url) {
-        let _ = run_git(
+        if crate::github_access::repository_url(clone_url).is_ok() {
+            return Err("The local checkout belongs to a different remote repository.".into());
+        }
+        run_git(
             &["remote", "set-url", "origin", clone_url],
             Some(repo_dir),
             auth,
-        );
+        )?;
     }
+    let remote_heads = run_git(
+        &["ls-remote", "--heads", "--end-of-options", "origin"],
+        Some(repo_dir),
+        auth,
+    )?;
+    let remote_has_branches = !remote_heads.trim().is_empty();
+    let has_remote_branch = |name: &str| {
+        remote_heads.lines().any(|line| {
+            line.split_once('\t')
+                .is_some_and(|(_, reference)| reference == format!("refs/heads/{name}"))
+        })
+    };
+    let selected_branch_exists = has_remote_branch(&branch);
     let base_branch =
         normalize_branch_option(base_branch).filter(|base_branch| *base_branch != branch);
     let mut fetch_args = vec![
@@ -463,34 +479,38 @@ pub(crate) fn compare_local_remote_status(
         "--depth=100",
         "--end-of-options",
         "origin",
-        branch.as_str(),
     ];
-    if let Some(base_branch) = base_branch.as_deref() {
+    let fetch_ref_start = fetch_args.len();
+    if selected_branch_exists {
+        fetch_args.push(branch.as_str());
+    }
+    if let Some(base_branch) = base_branch
+        .as_deref()
+        .filter(|name| has_remote_branch(name))
+    {
         fetch_args.push(base_branch);
     }
-    let _ = run_git(&fetch_args, Some(repo_dir), auth);
+    if fetch_args.len() > fetch_ref_start {
+        run_git(&fetch_args, Some(repo_dir), auth)?;
+    }
 
     let local_head = run_git(&["rev-parse", "HEAD"], Some(repo_dir), auth)
         .ok()
         .and_then(|output| first_output_line(&output));
     let remote_ref = format!("refs/remotes/origin/{branch}");
-    let remote_head = run_git(
-        &["rev-parse", "--verify", "--quiet", remote_ref.as_str()],
-        Some(repo_dir),
-        auth,
-    )
-    .ok()
-    .and_then(|output| first_output_line(&output));
-    // A legacy empty clone may have an unborn local `master` while the project
-    // declares `main`. Permit that mismatch only when the remote has no branch
-    // refs at all; any lookup failure is treated as non-empty (fail closed).
-    let remote_has_branches = run_git(
-        &["ls-remote", "--heads", "--end-of-options", "origin"],
-        Some(repo_dir),
-        auth,
-    )
-    .map(|output| !output.trim().is_empty())
-    .unwrap_or(true);
+    let remote_head = if selected_branch_exists {
+        let output = run_git(
+            &["rev-parse", "--verify", "--quiet", remote_ref.as_str()],
+            Some(repo_dir),
+            auth,
+        )?;
+        Some(
+            first_output_line(&output)
+                .ok_or_else(|| "Remote branch state is invalid".to_string())?,
+        )
+    } else {
+        None
+    };
     let is_first_publish = remote_head.is_none() && !remote_has_branches;
     let merge_base = base_branch.as_deref().and_then(|base_branch| {
         run_git(
@@ -505,7 +525,7 @@ pub(crate) fn compare_local_remote_status(
         .ok()
         .and_then(|output| first_output_line(&output))
     });
-    let status = run_git(&["status", "--porcelain"], Some(repo_dir), auth).unwrap_or_default();
+    let status = run_git(&["status", "--porcelain"], Some(repo_dir), auth)?;
     let has_uncommitted_changes = has_uncommitted_changes(&status);
     let has_untracked_files = has_untracked_files(&status);
     let ahead_count = match remote_head.as_deref() {
@@ -518,8 +538,7 @@ pub(crate) fn compare_local_remote_status(
             Some(repo_dir),
             auth,
         )
-        .map(|output| parse_count(&output))
-        .unwrap_or_default(),
+        .map(|output| parse_count(&output))?,
         None => usize::from(local_head.is_some()),
     };
     let behind_count = match remote_head.as_deref() {
@@ -532,8 +551,7 @@ pub(crate) fn compare_local_remote_status(
             Some(repo_dir),
             auth,
         )
-        .map(|output| parse_count(&output))
-        .unwrap_or_default(),
+        .map(|output| parse_count(&output))?,
         None => 0,
     };
 
@@ -574,7 +592,7 @@ pub(crate) fn compare_local_remote_status(
         None
     };
 
-    ProjectRepoSyncStatusInfo {
+    Ok(ProjectRepoSyncStatusInfo {
         local_path: Some(repo_dir.display().to_string()),
         local_branch,
         local_branches,
@@ -592,7 +610,7 @@ pub(crate) fn compare_local_remote_status(
         push_block_reason,
         can_pull: pull_block_reason.is_none(),
         pull_block_reason,
-    }
+    })
 }
 
 /// The viewer's configured git identity (`user.name` / `user.email`), used by
@@ -626,8 +644,8 @@ pub async fn get_project_repo_snapshot(
     target_commit: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<ProjectRepoSnapshotInfo, String> {
-    validate_workspace_clone_url(&clone_url, &state)?;
-    let auth = build_git_auth_config(&state)?;
+    validate_local_clone_url_for_workspace(&clone_url, &state)?;
+    let auth = build_git_clone_auth_config(&clone_url, &state)?;
     let branch = clean_branch(default_branch);
     let base_branch = clean_branch(base_branch);
     let target_ref = clean_target_ref(target_ref);
@@ -665,7 +683,10 @@ pub async fn get_project_local_repo_snapshot(
     base_branch: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Option<ProjectLocalRepoSnapshotInfo>, String> {
-    let auth = build_git_auth_config(&state)?;
+    let auth = match clone_url.as_deref() {
+        Some(url) => build_git_clone_auth_config(url, &state)?,
+        None => build_git_auth_config(&state)?,
+    };
     let branch = clean_branch(default_branch);
     let base_branch = clean_branch(base_branch);
 
@@ -734,7 +755,7 @@ pub async fn open_project_repository_folder(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    validate_workspace_clone_url(&clone_url, &state)?;
+    validate_local_clone_url_for_workspace(&clone_url, &state)?;
     let repo_dir = tauri::async_runtime::spawn_blocking(move || {
         find_local_repo_dir(repos_dir.as_deref(), &project_dtag, Some(&clone_url))?
             .ok_or_else(|| "No local checkout found.".to_string())
@@ -755,8 +776,8 @@ pub async fn get_project_repo_sync_status(
     base_branch: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<ProjectRepoSyncStatusInfo, String> {
-    validate_workspace_clone_url(&clone_url, &state)?;
-    let auth = build_git_auth_config(&state)?;
+    validate_local_clone_url_for_workspace(&clone_url, &state)?;
+    let auth = build_git_clone_auth_config(&clone_url, &state)?;
 
     tauri::async_runtime::spawn_blocking(move || {
         let Some(repo_dir) =
@@ -785,13 +806,13 @@ pub async fn get_project_repo_sync_status(
             });
         };
 
-        Ok(compare_local_remote_status(
+        compare_local_remote_status(
             &repo_dir,
             &clone_url,
             branch_name.as_deref(),
             base_branch.as_deref(),
             &auth,
-        ))
+        )
     })
     .await
     .map_err(|error| format!("repo sync status task failed: {error}"))?
@@ -806,8 +827,8 @@ pub async fn push_project_local_repository(
     base_branch: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<ProjectRepoPushResult, String> {
-    validate_workspace_clone_url(&clone_url, &state)?;
-    let auth = build_git_auth_config(&state)?;
+    validate_local_clone_url_for_workspace(&clone_url, &state)?;
+    let auth = build_git_clone_auth_config(&clone_url, &state)?;
 
     tauri::async_runtime::spawn_blocking(move || {
         let Some(repo_dir) =
@@ -837,8 +858,8 @@ pub async fn pull_project_local_repository(
     branch_name: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<ProjectRepoPullResult, String> {
-    validate_workspace_clone_url(&clone_url, &state)?;
-    let auth = build_git_auth_config(&state)?;
+    validate_local_clone_url_for_workspace(&clone_url, &state)?;
+    let auth = build_git_clone_auth_config(&clone_url, &state)?;
 
     tauri::async_runtime::spawn_blocking(move || {
         let Some(repo_dir) =
@@ -846,8 +867,13 @@ pub async fn pull_project_local_repository(
         else {
             return Err("No local checkout found.".to_string());
         };
-        let status =
-            compare_local_remote_status(&repo_dir, &clone_url, branch_name.as_deref(), None, &auth);
+        let status = compare_local_remote_status(
+            &repo_dir,
+            &clone_url,
+            branch_name.as_deref(),
+            None,
+            &auth,
+        )?;
         if !status.can_pull {
             return Err(status
                 .pull_block_reason

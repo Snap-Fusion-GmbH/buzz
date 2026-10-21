@@ -269,6 +269,7 @@ fn spawn_drain<R: Read + Send + 'static>(
     total: Arc<AtomicU64>,
     overflow: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
+    capture_limit: u64,
 ) -> JoinHandle<std::io::Result<Vec<u8>>> {
     // `stop` gates only the nonblocking Unix drain; the Windows path blocks to
     // the job-close EOF and never consults it.
@@ -285,9 +286,9 @@ fn spawn_drain<R: Read + Send + 'static>(
                     // `prev` is unique per call, so the two streams keep
                     // disjoint ranges and their retained bytes sum to <= cap.
                     let prev = total.fetch_add(n as u64, Ordering::Relaxed);
-                    if prev.saturating_add(n as u64) > CAPTURE_LIMIT {
+                    if prev.saturating_add(n as u64) > capture_limit {
                         overflow.store(true, Ordering::Relaxed);
-                        let keep = CAPTURE_LIMIT.saturating_sub(prev).min(n as u64) as usize;
+                        let keep = capture_limit.saturating_sub(prev).min(n as u64) as usize;
                         buf.extend_from_slice(&chunk[..keep]);
                         // Overflow: the result is already fail-closed, so nothing
                         // still in the pipe is worth preserving. Return NOW rather
@@ -360,7 +361,19 @@ fn spawn_drain<R: Read + Send + 'static>(
 ///   process group on Unix (the group-escapee case bounded by the drain rule
 ///   above) — the adjudicated asymmetry. The timeout path additionally sends a
 ///   graceful `SIGTERM` and a grace period before the kill.
-pub(crate) fn output_with_timeout(mut command: Command, timeout: Duration) -> Option<Output> {
+pub(crate) fn output_with_timeout(command: Command, timeout: Duration) -> Option<Output> {
+    output_with_limit(command, timeout, CAPTURE_LIMIT)
+}
+
+/// Run a contained command with an explicit aggregate output ceiling.
+pub(crate) fn output_with_limit(
+    mut command: Command,
+    timeout: Duration,
+    capture_limit: u64,
+) -> Option<Output> {
+    if capture_limit == 0 || capture_limit > 64 * 1024 * 1024 {
+        return None;
+    }
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -399,10 +412,24 @@ pub(crate) fn output_with_timeout(mut command: Command, timeout: Duration) -> Op
     let total = Arc::new(AtomicU64::new(0));
     let overflow = Arc::new(AtomicBool::new(false));
     let stop = Arc::new(AtomicBool::new(false));
-    let stdout_drain =
-        stdout_pipe.map(|s| spawn_drain(s, total.clone(), overflow.clone(), stop.clone()));
-    let stderr_drain =
-        stderr_pipe.map(|s| spawn_drain(s, total.clone(), overflow.clone(), stop.clone()));
+    let stdout_drain = stdout_pipe.map(|s| {
+        spawn_drain(
+            s,
+            total.clone(),
+            overflow.clone(),
+            stop.clone(),
+            capture_limit,
+        )
+    });
+    let stderr_drain = stderr_pipe.map(|s| {
+        spawn_drain(
+            s,
+            total.clone(),
+            overflow.clone(),
+            stop.clone(),
+            capture_limit,
+        )
+    });
 
     let deadline = Instant::now() + timeout;
     let status = loop {
@@ -469,6 +496,22 @@ fn join_drain(drain: Option<JoinHandle<std::io::Result<Vec<u8>>>>) -> Option<Vec
 mod tests {
     use super::*;
     use std::sync::mpsc;
+
+    #[cfg(unix)]
+    #[test]
+    fn explicit_capture_ceiling_is_enforced_before_returning_output() {
+        let command = || {
+            let mut command = Command::new("/bin/sh");
+            command.args(["-c", "head -c 8192 /dev/zero"]);
+            command
+        };
+        assert!(output_with_limit(command(), Duration::from_secs(5), 4096).is_none());
+        let output =
+            output_with_limit(command(), Duration::from_secs(5), 16_384).expect("bounded output");
+        assert!(output.status.success());
+        assert_eq!(output.stdout.len(), 8192);
+        assert!(output_with_limit(command(), Duration::from_secs(5), 0).is_none());
+    }
 
     /// Drive `output_with_timeout` on its own thread under an independent
     /// wall-clock `bound` — the real outer bound, unreachable by an inline `elapsed()` assertion if the helper hangs.
@@ -634,7 +677,13 @@ mod tests {
         // since a continuously-ready reader never hits the `WouldBlock` arm that
         // consults it. The overflow return is the only thing that can bound it.
         let stop = Arc::new(AtomicBool::new(true));
-        let drain = spawn_drain(AlwaysReady, total.clone(), overflow.clone(), stop);
+        let drain = spawn_drain(
+            AlwaysReady,
+            total.clone(),
+            overflow.clone(),
+            stop,
+            CAPTURE_LIMIT,
+        );
 
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {

@@ -1,5 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
+import {
+  getGitHubRepositoryState,
+  isGitHubRepositoryUrl,
+} from "@/shared/api/github";
 
 import { relayClient } from "@/shared/api/relayClient";
 import { getRelaySelf } from "@/features/moderation/lib/relaySelf";
@@ -182,6 +186,10 @@ function eventToRepoState(event: RelayEvent): RepoState {
 export async function fetchRepoState(
   project: Repository,
 ): Promise<RepoState | null> {
+  const cloneUrl = project.cloneUrls[0];
+  if (cloneUrl && isGitHubRepositoryUrl(cloneUrl)) {
+    return getGitHubRepositoryState(cloneUrl);
+  }
   const relaySelf = await getRelaySelf();
   const trustedAuthors = [
     ...new Set(

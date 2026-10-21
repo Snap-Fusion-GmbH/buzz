@@ -138,6 +138,7 @@ export default defineConfig({
         "**/inbox-edit.spec.ts",
         "**/send-channel-binding.spec.ts",
         "**/project-cold-start.spec.ts",
+        "**/private-github.spec.ts",
         "**/project-commit-detail.spec.ts",
         "**/project-empty-state-alignment.spec.ts",
         "**/project-inbox.spec.ts",
