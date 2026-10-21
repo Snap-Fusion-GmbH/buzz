@@ -1,7 +1,7 @@
 {
   "name": "buzz",
   "private": true,
-  "version": "0.5.30-snap.1",
+  "version": "0.5.31-snap.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
