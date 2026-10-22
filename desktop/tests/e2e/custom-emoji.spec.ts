@@ -309,6 +309,46 @@ test("message quick reaction stays neutral after selecting a shortcut", async ({
   );
 });
 
+test("a duplicate reaction acknowledgement reconciles the pill without an inline error", async ({
+  page,
+}) => {
+  await openGeneral(page);
+  await page.evaluate(() => {
+    const native = (
+      window as Window & {
+        __TAURI_INTERNALS__: {
+          invoke: (command: string, args?: unknown) => Promise<unknown>;
+        };
+      }
+    ).__TAURI_INTERNALS__;
+    const invoke = native.invoke.bind(native);
+    native.invoke = async (command, args) => {
+      const result = await invoke(command, args);
+      if (command === "add_reaction") {
+        throw new Error(
+          "relay rejected event: duplicate: reaction already exists",
+        );
+      }
+      return result;
+    };
+  });
+  const row = reactionTargetRow(page);
+  await row.hover();
+  await row.getByRole("button", { name: "React with :+1:" }).click();
+  const pill = row.getByLabel("Toggle 👍 reaction");
+  await expect(pill).toBeVisible();
+  await expect(pill).toBeEnabled();
+  await expect(row.getByText(/duplicate: reaction already exists/)).toHaveCount(
+    0,
+  );
+  await waitForAnimations(page);
+  await row.screenshot({
+    path: "test-results/duplicate-reaction-recovered.png",
+  });
+  await pill.click();
+  await expect(pill).toHaveCount(0);
+});
+
 test("message reaction action stays neutral after selecting from the picker", async ({
   page,
 }) => {

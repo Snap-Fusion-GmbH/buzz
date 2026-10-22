@@ -144,8 +144,10 @@ test("refreshChannelsQuery preserves a live update through authoritative full-li
 test("refreshChannelsQuery preserves a live update through mismatched not-modified retry", async () => {
   const harness = makeRefreshHarness();
   const retry = deferred();
+  const retryStarted = deferred();
   const fetchChannels = (knownHash) => {
     harness.calls.push(knownHash);
+    if (harness.calls.length > 1) retryStarted.resolve();
     return harness.calls.length === 1
       ? Promise.resolve({
           hash: "mismatched-hash",
@@ -156,7 +158,7 @@ test("refreshChannelsQuery preserves a live update through mismatched not-modifi
   };
   const refresh = refreshWithHarness(harness, fetchChannels);
 
-  await Promise.resolve();
+  await retryStarted.promise;
   assert.deepEqual(harness.calls, ["hash-1", null]);
   setDisplayedRecency(harness.queryClient, T2);
   retry.resolve({

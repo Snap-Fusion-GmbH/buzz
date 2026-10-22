@@ -135,6 +135,70 @@ test("verification outage stays blocked and offers a retry", async ({
   });
 });
 
+test("a relay membership denial refreshes the same workspace and clears the sidebar error", async ({
+  page,
+}) => {
+  await installMockBridge(
+    page,
+    { managedWorkspace: { status: signedIn() } },
+    {
+      skipCommunitySeed: true,
+      skipOnboardingSeed: true,
+      relayWsUrl: "wss://managed.example.invalid",
+    },
+  );
+  await page.goto("/");
+  await expect(page.getByTestId("app-sidebar")).toBeVisible();
+  await expect(page.getByTestId("channel-general")).toBeVisible();
+  const result = await page.evaluate(async () => {
+    const native = (
+      window as Window & {
+        __TAURI_INTERNALS__: {
+          invoke: (command: string, args?: unknown) => Promise<unknown>;
+        };
+      }
+    ).__TAURI_INTERNALS__;
+    const client = (
+      window as Window & {
+        __BUZZ_E2E_QUERY_CLIENT__: {
+          invalidateQueries: (input: { queryKey: string[] }) => Promise<void>;
+          getQueryState: (key: string[]) => { error: unknown };
+        };
+      }
+    ).__BUZZ_E2E_QUERY_CLIENT__;
+    const invoke = native.invoke.bind(native);
+    let denied = false;
+    let verifications = 0;
+    native.invoke = async (command, args) => {
+      if (command === "get_channels" && !denied) {
+        denied = true;
+        throw new Error(
+          "relay returned 403 Forbidden: You must be a relay member to access this relay",
+        );
+      }
+      if (command === "managed_workspace_status") verifications += 1;
+      return invoke(command, args);
+    };
+    await client.invalidateQueries({ queryKey: ["channels"] });
+    return {
+      denied,
+      verifications,
+      error: client.getQueryState(["channels"]).error,
+    };
+  });
+  expect(result).toEqual({ denied: true, verifications: 1, error: null });
+  await expect(
+    page.getByText("You must be a relay member to access this relay", {
+      exact: false,
+    }),
+  ).toHaveCount(0);
+  await expect(page.getByTestId("channel-general")).toBeVisible();
+  await waitForAnimations(page);
+  await page.getByTestId("app-sidebar").screenshot({
+    path: "test-results/managed-membership-recovered.png",
+  });
+});
+
 test("an existing session recovers from outages and denied access without another login", async ({
   page,
 }) => {
