@@ -31,6 +31,7 @@ export default defineConfig({
         "**/identity-key-help.spec.ts",
         "**/exact-key-profile.spec.ts",
         "**/profile-name-refresh.spec.ts",
+        "**/project-repository-recovery.spec.ts",
         "**/key-import-reveal.spec.ts",
         "**/navigation.spec.ts",
         "**/channels.spec.ts",

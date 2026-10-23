@@ -234,7 +234,7 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
   const memberChannelIds = useMemberChannelIds();
   const remoteUnavailableReason =
     repoRemote.host.kind === "buzz" &&
-    !repoSnapshotQuery.isLoading &&
+    repoSnapshotQuery.isError &&
     !displayedRepoSnapshot
       ? refineRepoUnavailableReason({
           reason: projectRepoUnavailableReason(repoSnapshotQuery.error),
@@ -328,6 +328,15 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
     localHead: repoSyncStatusQuery.data?.localHead,
   });
   const handleFetchRepo = React.useCallback(async () => {
+    if (!repository?.cloneUrls[0]) {
+      const refreshed = await projectQuery.refetch();
+      if (refreshed.error) {
+        toast.error("Could not refresh project metadata.", {
+          description: "Check your connection and try again.",
+        });
+      }
+      return;
+    }
     const results = await Promise.all([
       repoSnapshotQuery.refetch(),
       repoStateQuery.refetch(),
@@ -354,6 +363,7 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
   }, [
     isGitHubRemote,
     memberChannelIds,
+    projectQuery.refetch,
     repoSnapshotQuery,
     repoStateQuery,
     repoSyncStatusQuery,
@@ -972,7 +982,7 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
                     snapshot={displayedRepoSnapshot}
                     snapshotError={repoSnapshotQuery.error}
                     snapshotLoading={
-                      repoSnapshotQuery.isLoading && !displayedRepoSnapshot
+                      repoSnapshotQuery.isPending && !displayedRepoSnapshot
                     }
                     sourceControls={filesSourceControls}
                     viewerGitIdentity={viewerGitIdentity}

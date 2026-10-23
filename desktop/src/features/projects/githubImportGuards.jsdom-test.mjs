@@ -109,6 +109,8 @@ test("an identity change during project discovery cannot start a private GitHub 
   mockIPC((command) => {
     if (command === "get_identity") return { pubkey, display_name: "Fixture" };
     if (command === "get_github_repository") return repository;
+    if (command === "get_relay_http_url")
+      return "https://relay.example.invalid";
     writes.push(command);
     throw new Error("Unexpected project write");
   });
@@ -136,6 +138,8 @@ test("a workspace reset during project discovery is fenced even when its origin 
     if (command === "get_identity")
       return { pubkey: "a".repeat(64), display_name: "Fixture" };
     if (command === "get_github_repository") return repository;
+    if (command === "get_relay_http_url")
+      return "https://relay.example.invalid";
     writes.push(command);
     throw new Error("Unexpected project write");
   });
@@ -165,6 +169,8 @@ for (const boundary of ["signing", "project-publication"]) {
       if (command === "get_identity")
         return { pubkey: "a".repeat(64), display_name: "Fixture" };
       if (command === "get_github_repository") return repository;
+      if (command === "get_relay_http_url")
+        return "https://relay.example.invalid";
       if (command === "create_channel")
         return {
           id: "a4aef0d7-8cf4-47ae-90f1-b98bfb256b97",
