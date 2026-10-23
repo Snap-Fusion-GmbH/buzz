@@ -2,10 +2,10 @@ import * as React from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 
 import {
-  USERS_BATCH_ENTRY_FRESH_MS,
+  isUsersBatchEntryFresh,
   usersBatchEntryKey,
   type UsersBatchEntry,
-} from "@/features/profile/hooks";
+} from "@/features/profile/lib/userProfileFreshness";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { getUsersBatch } from "@/shared/api/tauriProfiles";
 import { normalizePubkey } from "@/shared/lib/pubkey";
@@ -44,8 +44,8 @@ async function fetchTrustedMentionAliases(
     const entry = queryClient.getQueryData<UsersBatchEntry>(
       usersBatchEntryKey(pubkey),
     );
-    if (entry && now - entry.fetchedAt < USERS_BATCH_ENTRY_FRESH_MS) {
-      aliases.set(pubkey, collectProfileAliases(entry.summary ?? undefined));
+    if (isUsersBatchEntryFresh(entry, now, pubkey)) {
+      aliases.set(pubkey, collectProfileAliases(entry?.summary ?? undefined));
     } else {
       toFetch.push(pubkey);
     }
