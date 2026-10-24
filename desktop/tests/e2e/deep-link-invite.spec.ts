@@ -262,11 +262,10 @@ test("queued add-community links open and acknowledge one at a time", async ({
     ]);
 });
 
-test("deleted public starter channels do not strand community onboarding", async ({
+test("welcome retirement failures do not strand community onboarding", async ({
   page,
 }) => {
-  const starterError =
-    "starter channels created but metadata not yet available";
+  const retirementError = "Mock welcome retirement failed.";
   await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await page.addInitScript(
     ({ pubkey, relayUrl, storageKey }) => {
@@ -278,7 +277,7 @@ test("deleted public starter channels do not strand community onboarding", async
       window.localStorage.setItem(
         storageKey,
         JSON.stringify({
-          id: "txn-deleted-starters-1",
+          id: "txn-welcome-retirement-1",
           source: "deep-link-join",
           stage: "team-intro",
           relayUrl,
@@ -297,7 +296,7 @@ test("deleted public starter channels do not strand community onboarding", async
   );
   await installMockBridge(
     page,
-    { ensureStarterChannelsErrors: [starterError] },
+    { retireWelcomeChannelsErrors: [retirementError] },
     { relayWsUrl: COMMUNITY_RELAY_URL, skipOnboardingSeed: true },
   );
   await page.goto("/");
@@ -305,66 +304,41 @@ test("deleted public starter channels do not strand community onboarding", async
   await page.getByRole("button", { name: "Take me to Buzz" }).click();
 
   await expect(page.getByTestId("community-onboarding-flow")).toHaveCount(0);
-  await expect(page).toHaveURL(/#\/channels\/[^/]+$/);
-  await expect(page.getByTestId("chat-title")).toContainText("Welcome");
-  await expect(page.getByText(starterError)).toHaveCount(0);
+  // Home, not a seeded channel: nothing is created for a new member.
+  await expect(page).toHaveURL(/#\/$/);
+  await expect(page.getByTestId("home-inbox-list")).toBeVisible();
   expect(
     await page.evaluate(
       () =>
         window.__BUZZ_E2E_COMMANDS__?.filter(
-          (command) => command === "ensure_starter_channels",
+          (command) => command === "retire_welcome_channels",
         ).length ?? 0,
     ),
-  ).toBe(1);
+  ).toBeGreaterThan(0);
 });
 
-test("required Welcome creation failure keeps community onboarding open", async ({
+test("create_channel is never called for a new member's first landing", async ({
   page,
 }) => {
-  const welcomeError = "Channel creation is not permitted.";
   await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
-  await page.addInitScript(
-    ({ pubkey, relayUrl, storageKey }) => {
-      window.localStorage.setItem(
-        `buzz-machine-onboarding-complete.v2:${pubkey}`,
-        "true",
-      );
-      const timestamp = new Date().toISOString();
-      window.localStorage.setItem(
-        storageKey,
-        JSON.stringify({
-          id: "txn-welcome-failure-1",
-          source: "deep-link-join",
-          stage: "team-intro",
-          relayUrl,
-          communityName: "hive",
-          communityId: "e2e-default-community",
-          createdAt: timestamp,
-          updatedAt: timestamp,
-        }),
-      );
-    },
-    {
-      pubkey: COMMUNITY_ONBOARDING_PUBKEY,
-      relayUrl: COMMUNITY_RELAY_URL,
-      storageKey: TRANSACTION_STORAGE_KEY,
-    },
-  );
-  await installMockBridge(
-    page,
-    { createChannelErrors: [welcomeError] },
-    { relayWsUrl: COMMUNITY_RELAY_URL, skipOnboardingSeed: true },
-  );
+  await installMockBridge(page, undefined, {
+    relayWsUrl: COMMUNITY_RELAY_URL,
+    skipOnboardingSeed: true,
+  });
   await page.goto("/");
 
   await page.getByRole("button", { name: "Take me to Buzz" }).click();
 
-  await expect(page.getByTestId("community-onboarding-flow")).toBeVisible();
-  await expect(page.getByText(`${welcomeError} Try again.`)).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Take me to Buzz" }),
-  ).toBeEnabled();
-  await expect(page.getByTestId("chat-title")).toHaveCount(0);
+  await expect(page.getByTestId("community-onboarding-flow")).toHaveCount(0);
+  await expect(page).toHaveURL(/#\/$/);
+  expect(
+    await page.evaluate(
+      () =>
+        window.__BUZZ_E2E_COMMANDS__?.filter(
+          (command) => command === "create_channel",
+        ).length ?? 0,
+    ),
+  ).toBe(0);
 });
 
 test("persisted deep-link invite hands off to Joining after machine onboarding", async ({

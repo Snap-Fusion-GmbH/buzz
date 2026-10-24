@@ -581,8 +581,7 @@ function CommunityApp({
     transaction?.relayUrl,
   ]);
   // During "entering" the transaction stays alive as a curtain: the app mounts
-  // underneath (already pointed at the Welcome channel route) while the
-  // onboarding screen covers it, then fades once Welcome reports ready.
+  // underneath on Home while the onboarding screen covers it, then fades.
   //
   // The flow must keep ONE stable position in the element tree across every
   // stage. Rendering it from a different slot when the stage flips to

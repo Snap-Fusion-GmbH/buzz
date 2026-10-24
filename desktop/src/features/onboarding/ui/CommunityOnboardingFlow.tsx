@@ -6,13 +6,9 @@ import {
   markCommunityOnboardingComplete,
   useCommunityOnboarding,
 } from "@/features/onboarding/communityOnboarding";
-import { initializeStarterChannels } from "@/features/onboarding/hooks";
+import { retireSeededWelcomeChannels } from "@/features/onboarding/hooks";
 import { useClaimInvite } from "@/features/onboarding/useClaimInvite";
 import { CommunityChangeOverlay } from "@/features/communities/ui/CommunityChangeOverlay";
-import {
-  takePendingWelcomeChannelForDirectEntry,
-  WELCOME_SURFACE_READY_EVENT,
-} from "@/features/onboarding/welcome";
 import { useAvatarPresentation } from "@/features/profile/avatarPresentationStore";
 import { registerAvatarWhenReady } from "@/features/profile/avatarProfileSync";
 import { profileQueryKey } from "@/features/profile/hooks";
@@ -62,7 +58,6 @@ const ENTERING_CURTAIN_FADE_MS = 500;
  * Safety valve: if Welcome never reports ready (slow relay, failed query),
  * fade anyway rather than stranding the user on the onboarding screen.
  */
-const ENTERING_CURTAIN_MAX_WAIT_MS = 8_000;
 
 const NEUTRAL_EMOJI_PICKER_THEME_VARS = {
   "--buzz-emoji-picker-rgb-background":
@@ -187,8 +182,6 @@ export function CommunityOnboardingFlow({
   );
   const [isPending, setIsPending] = React.useState(false);
   const checkedProfileTransactionRef = React.useRef<string | null>(null);
-  const [starterChannelFailureCount, setStarterChannelFailureCount] =
-    React.useState(0);
   const [deniedPubkey, setDeniedPubkey] = React.useState("");
   const [isMembershipDenied, setIsMembershipDenied] = React.useState(false);
   const [isCommunityChangeOpen, setIsCommunityChangeOpen] =
@@ -231,32 +224,14 @@ export function CommunityOnboardingFlow({
     if (transaction?.stage === "connecting") onConnect();
   }, [onConnect, transaction?.stage]);
 
-  // "Entering" curtain: the app is mounting on the Welcome route underneath.
-  // Fade out when Welcome reports its first settled render — or after a
-  // safety timeout so a slow load can never strand the user on this screen.
   const isEnteringStage = transaction?.stage === "entering";
   React.useEffect(() => {
     if (!isEnteringStage) return;
-
-    let fadeTimer: number | null = null;
-    const beginFade = () => {
-      if (fadeTimer !== null) return;
-      setIsCurtainFading(true);
-      fadeTimer = window.setTimeout(() => {
-        clear();
-      }, ENTERING_CURTAIN_FADE_MS);
-    };
-
-    window.addEventListener(WELCOME_SURFACE_READY_EVENT, beginFade);
-    const safetyTimer = window.setTimeout(
-      beginFade,
-      ENTERING_CURTAIN_MAX_WAIT_MS,
-    );
-    return () => {
-      window.removeEventListener(WELCOME_SURFACE_READY_EVENT, beginFade);
-      window.clearTimeout(safetyTimer);
-      if (fadeTimer !== null) window.clearTimeout(fadeTimer);
-    };
+    // The app is mounted under this curtain; fade it once the frame has had a
+    // chance to paint so the transition does not flash an empty shell.
+    setIsCurtainFading(true);
+    const timer = window.setTimeout(clear, ENTERING_CURTAIN_FADE_MS);
+    return () => window.clearTimeout(timer);
   }, [clear, isEnteringStage]);
 
   const retry = () =>
@@ -265,50 +240,34 @@ export function CommunityOnboardingFlow({
       error: undefined,
     });
   const relayUrl = transaction?.relayUrl;
-  const finish = React.useCallback(async () => {
-    if (!relayUrl) return;
-    const identity = await getIdentity();
-    markCommunityOnboardingComplete(identity.pubkey, relayUrl);
-    clear();
-  }, [clear, relayUrl]);
   const finalize = React.useCallback(async () => {
     if (isPending || !relayUrl) return;
     setIsPending(true);
     update({ stage: "finalizing", error: undefined });
     try {
       const identity = await getIdentity();
-      const result = await initializeStarterChannels(queryClient, {
-        focus: true,
-        pubkey: identity.pubkey,
-        communityScope: relayUrl,
-      });
-      if (!result.ok) throw new Error(result.reason);
-      if (result.focusChannelId) {
-        // Direct entry: point the router at the Welcome channel *before* the
-        // app mounts, so it never lands on Home first. Consume the pending
-        // entry — it exists for the Home-route fallback, and leaving it would
-        // yank a later Home visit back to Welcome.
-        takePendingWelcomeChannelForDirectEntry();
-        window.location.hash = `/channels/${result.focusChannelId}`;
-        markCommunityOnboardingComplete(identity.pubkey, relayUrl);
-        // Keep this screen mounted as a curtain over the loading app; the
-        // "entering" stage fades it out once Welcome reports ready.
-        update({ stage: "entering", error: undefined });
-        return;
+      // Best-effort: a failed retirement must not strand onboarding. It is
+      // idempotent and retried on the next start, so surface it on the screen
+      // rather than converting it into success.
+      const result = await retireSeededWelcomeChannels();
+      markCommunityOnboardingComplete(identity.pubkey, relayUrl);
+      if (!result.ok) {
+        update({ error: result.reason });
       }
-      await finish();
-    } catch (error) {
-      setStarterChannelFailureCount((count) => count + 1);
+      // No channel is seeded any more, so the app lands on Home. Keep this
+      // screen mounted as a brief curtain; the effect above clears it.
       update({
-        error: error instanceof Error ? error.message : String(error),
+        stage: "entering",
+        error: result.ok ? undefined : result.reason,
       });
+    } catch (error) {
+      update({ error: error instanceof Error ? error.message : String(error) });
       setIsPending(false);
     }
-  }, [finish, isPending, queryClient, relayUrl, update]);
+  }, [isPending, relayUrl, update]);
 
   const backToProfile = React.useCallback(() => {
     if (isPending) return;
-    setStarterChannelFailureCount(0);
     setTransitionDirection("backward");
     update({ stage: "profile", error: undefined });
   }, [isPending, update]);
@@ -792,8 +751,7 @@ export function CommunityOnboardingFlow({
                 </div>
                 {transaction.error ? (
                   <p className="text-sm text-destructive">
-                    {transaction.error}
-                    {starterChannelFailureCount === 1 ? " Try again." : null}
+                    {transaction.error} Try again.
                   </p>
                 ) : null}
                 <OnboardingFooter>
@@ -804,22 +762,11 @@ export function CommunityOnboardingFlow({
                     onClick={() => void finalize()}
                   >
                     {isPending || transaction.stage === "entering" ? (
-                      <LoadingDots label="Preparing Welcome" />
+                      <LoadingDots label="Preparing your workspace" />
                     ) : (
                       "Take me to Buzz"
                     )}
                   </Button>
-                  {starterChannelFailureCount >= 2 ? (
-                    <Button
-                      className="h-9 rounded-full px-5 hover:bg-foreground/10"
-                      data-testid="community-team-intro-skip"
-                      disabled={isPending || transaction.stage === "entering"}
-                      onClick={() => void finish()}
-                      variant="ghost"
-                    >
-                      Skip for now
-                    </Button>
-                  ) : null}
                 </OnboardingFooter>
               </>
             )}

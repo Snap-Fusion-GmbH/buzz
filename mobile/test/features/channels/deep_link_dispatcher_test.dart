@@ -390,10 +390,9 @@ void main() {
   });
 
   testWidgets(
-    'shows saved starter recovery progress, then opens welcome-everyone',
+    'shows saved welcome retirement progress, then finishes without a channel',
     (tester) async {
       const relayUrl = 'wss://relay.example.com';
-      const welcomeId = 'welcome-everyone-id';
       final storage = CommunityStorage(secure: FakeSecureStorage());
       await storage.save(
         Community(
@@ -416,10 +415,6 @@ void main() {
             ),
           ),
           inviteJoinRecoveryProvider.overrideWithValue((_) => recovery),
-          channelsProvider.overrideWith(
-            () =>
-                _FakeChannelsNotifier(Future.value([_welcomeEveryoneChannel])),
-          ),
         ],
       );
       addTearDown(container.dispose);
@@ -451,16 +446,14 @@ void main() {
         isNull,
       );
 
-      recovery.complete(welcomeId);
+      recovery.complete();
       await tester.pumpAndSettle();
 
-      expect(find.text('Continue to #welcome-everyone'), findsOneWidget);
-      await tester.tap(find.text('Continue to #welcome-everyone'));
-      await tester.pumpAndSettle();
-      final destination = tester.widget<_CapturedDestination>(
-        find.byType(_CapturedDestination),
-      );
-      expect(destination.link, const ChannelDeepLink(channelId: welcomeId));
+      // No channel is seeded any more, so the sheet offers no destination and
+      // no channel is pushed.
+      expect(find.text('Continue to #welcome-everyone'), findsNothing);
+      expect(find.text('Not now'), findsOneWidget);
+      expect(find.byType(_CapturedDestination), findsNothing);
     },
   );
 
@@ -511,7 +504,7 @@ void main() {
 
     expect(
       find.text(
-        'Starter channels could not be set up. Retry setup to try again.',
+        'Welcome channels could not be retired. Retry setup to try again.',
       ),
       findsOneWidget,
     );
@@ -682,7 +675,7 @@ void main() {
     },
   );
 
-  testWidgets('continues a successful invite into welcome-everyone', (
+  testWidgets('a successful invite offers no seeded-channel destination', (
     tester,
   ) async {
     const invite = InviteDeepLink(
@@ -718,19 +711,12 @@ void main() {
 
     await tester.tap(find.widgetWithText(FilledButton, 'Join'));
     await tester.pumpAndSettle();
-    expect(find.text('Continue to #welcome-everyone'), findsOneWidget);
 
-    await tester.tap(find.text('Continue to #welcome-everyone'));
-    await tester.pumpAndSettle();
-
-    final destination = tester.widget<_CapturedDestination>(
-      find.byType(_CapturedDestination),
-    );
-    expect(destination.channel.id, 'welcome-everyone-id');
-    expect(
-      destination.link,
-      const ChannelDeepLink(channelId: 'welcome-everyone-id'),
-    );
+    // Nothing is seeded any more, so the sheet offers no channel to continue
+    // into and no destination is pushed.
+    expect(find.text('Continue to #welcome-everyone'), findsNothing);
+    expect(find.text('Not now'), findsOneWidget);
+    expect(find.byType(_CapturedDestination), findsNothing);
   });
 }
 
@@ -787,10 +773,7 @@ class _SuccessfulInviteJoinNotifier extends InviteJoinNotifier {
 
   @override
   Future<void> confirmJoin() async {
-    state = state.copyWith(
-      status: InviteJoinStatus.success,
-      focusChannelId: 'welcome-everyone-id',
-    );
+    state = state.copyWith(status: InviteJoinStatus.success);
   }
 }
 
@@ -884,16 +867,16 @@ class _FakeChannelsNotifier extends ChannelsNotifier {
 }
 
 class _DeferredInviteJoinRecovery implements InviteJoinRecovery {
-  final Completer<String?> _result = Completer<String?>();
+  final Completer<void> _result = Completer<void>();
   final Completer<void> started = Completer<void>();
 
   @override
-  Future<String?> ensureStarterChannels() {
+  Future<void> retireWelcomeChannels() {
     started.complete();
     return _result.future;
   }
 
-  void complete(String? focusChannelId) => _result.complete(focusChannelId);
+  void complete() => _result.complete();
 
   void completeError(Object error) => _result.completeError(error);
 }

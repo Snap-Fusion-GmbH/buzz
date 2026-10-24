@@ -233,20 +233,7 @@ class _DeepLinkDispatcherState extends ConsumerState<DeepLinkDispatcher> {
               ref.read(inviteJoinProvider.notifier).startStarterSetupRecovery(),
             );
           }
-          final shouldFocusStarter = await sheet;
-          final focusChannelId = ref.read(inviteJoinProvider).focusChannelId;
-          if (shouldFocusStarter == true &&
-              focusChannelId != null &&
-              ref.read(pendingDeepLinkProvider) == null &&
-              navigatorContext.mounted) {
-            final channels = ref.read(channelsProvider).asData?.value;
-            final channel = channels
-                ?.where((candidate) => candidate.id == focusChannelId)
-                .firstOrNull;
-            if (channel != null) {
-              _pushChannel(channel, ChannelDeepLink(channelId: focusChannelId));
-            }
-          }
+          await sheet;
         } else if (status == InviteJoinStatus.switchedExisting) {
           messenger?.showSnackBar(
             const SnackBar(content: Text('Switched to this community')),
