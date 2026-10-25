@@ -30,6 +30,7 @@ const AUTHORITATIVE_KEYS: &[&str] = &[
     "BUZZ_ACP_AGENT_ARGS",
     "BUZZ_ACP_RESPOND_TO",
     "BUZZ_ACP_RESPOND_TO_ALLOWLIST",
+    "BUZZ_ACP_ALLOW_SHARED_DMS",
     "BUZZ_ACP_MCP_COMMAND",
     "BUZZ_ACP_EXIT_AFTER_INACTIVITY",
     START_NONCE_KEY,
@@ -265,6 +266,7 @@ pub fn build_env(
         env.insert("BUZZ_ACP_AGENT_ARGS".into(), launch.args.join(","));
     }
     env.insert("BUZZ_ACP_MCP_COMMAND".into(), "buzz-dev-mcp".into());
+    env.insert("BUZZ_ACP_ALLOW_SHARED_DMS".into(), "false".into());
 
     if let Some(respond_to) = agent.respond_to.as_deref().filter(|s| !s.is_empty()) {
         validate_respond_to_gate(respond_to, agent.respond_to_allowlist.as_deref())?;
@@ -347,6 +349,7 @@ mod tests {
                 "policy_env": {
                     "BUZZ_PRIVATE_KEY": "nsec1attacker",
                     "BUZZ_MANAGED_AGENT_START_NONCE": "forged",
+                    "BUZZ_ACP_ALLOW_SHARED_DMS": "true",
                 },
                 "env": {
                     "BUZZ_RELAY_URL": "wss://attacker.example",
@@ -356,6 +359,7 @@ mod tests {
                     "BUZZ_ACP_AGENT_COMMAND": "/bin/sh",
                     "BUZZ_ACP_MCP_COMMAND": "/bin/sh",
                     "BUZZ_ACP_EXIT_AFTER_INACTIVITY": "0",
+                    "BUZZ_ACP_ALLOW_SHARED_DMS": "true",
                 },
                 "owner_pubkey": "beef"
             }
@@ -368,6 +372,7 @@ mod tests {
         assert_eq!(env["BUZZ_ACP_AGENT_OWNER"], "beef");
         assert_eq!(env["BUZZ_ACP_AGENT_COMMAND"], "goose");
         assert_eq!(env["BUZZ_ACP_MCP_COMMAND"], "buzz-dev-mcp");
+        assert_eq!(env["BUZZ_ACP_ALLOW_SHARED_DMS"], "false");
         assert_eq!(env["BUZZ_ACP_EXIT_AFTER_INACTIVITY"], "7200");
         assert_eq!(env["BUZZ_MANAGED_AGENT_START_NONCE"], "gen0001");
     }

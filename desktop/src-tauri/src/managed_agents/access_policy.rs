@@ -82,7 +82,10 @@ pub(crate) fn build_respond_to_env_with_policy(
         );
     }
 
-    let mut set = vec![("BUZZ_ACP_RESPOND_TO", respond_to.as_str().to_string())];
+    let mut set = vec![
+        ("BUZZ_ACP_RESPOND_TO", respond_to.as_str().to_string()),
+        ("BUZZ_ACP_ALLOW_SHARED_DMS", "false".to_string()),
+    ];
     let mut remove = Vec::new();
     if enforced_owner_only {
         set.push((
@@ -160,6 +163,12 @@ mod tests {
             let (gate_set, _) =
                 build_respond_to_env_with_policy(&record, Some("owner"), true).unwrap();
             let gate_set: std::collections::HashMap<_, _> = gate_set.into_iter().collect();
+            assert_eq!(
+                gate_set
+                    .get("BUZZ_ACP_ALLOW_SHARED_DMS")
+                    .map(String::as_str),
+                Some("false"),
+            );
             assert_eq!(
                 gate_set.get("BUZZ_ACP_RESPOND_TO").map(String::as_str),
                 Some("owner-only"),

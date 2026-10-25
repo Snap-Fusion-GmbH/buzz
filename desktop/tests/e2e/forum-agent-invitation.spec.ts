@@ -10,7 +10,6 @@ async function install(
   overrides: Parameters<typeof installMockBridge>[1] = {},
 ) {
   await installMockBridge(page, {
-    ...overrides,
     ownerOnlyAccessBuild: true,
     managedAgents: [],
     searchProfiles: [
@@ -31,6 +30,7 @@ async function install(
         channelNames: [],
       },
     ],
+    ...overrides,
   });
   await page.goto("/");
   await page.getByTestId("channel-general").click();
@@ -79,8 +79,11 @@ async function assertNoLocalLifecycle(page: Page) {
 }
 const FORUM = "a27e1ee9-76a6-5bdf-a5d5-1d85610dad11";
 
-async function openStandaloneForumInvite(page: Page) {
-  await install(page);
+async function openStandaloneForumInvite(
+  page: Page,
+  overrides: Parameters<typeof installMockBridge>[1] = {},
+) {
+  await install(page, overrides);
   await page.getByTestId("channel-watercooler").click();
   await expect(page.getByTestId("chat-title")).toHaveText("watercooler");
   await page.getByRole("button", { name: "Start a new post..." }).click();
@@ -141,7 +144,7 @@ test("standalone forum explicitly invites, refreshes membership, then sends exac
       expect.objectContaining({
         command: "revalidate_relay_agents",
         payload: expect.objectContaining({
-          channelId: FORUM,
+          channelId: undefined,
           pubkeys: [REMOTE],
         }),
       }),
@@ -156,6 +159,48 @@ test("standalone forum explicitly invites, refreshes membership, then sends exac
   );
   expect(refreshIndex).toBeGreaterThanOrEqual(0);
   expect(finalCheckIndex).toBeGreaterThan(refreshIndex);
+  expect(afterAdd[finalCheckIndex].payload).toMatchObject({
+    channelId: FORUM,
+    pubkeys: [REMOTE],
+  });
+  await assertNoLocalLifecycle(page);
+});
+
+test("standalone forum invites a shared agent from another channel before publication", async ({
+  page,
+}) => {
+  const ownerPubkey = "ab".repeat(32);
+  const dialog = await openStandaloneForumInvite(page, {
+    searchProfiles: [
+      {
+        pubkey: REMOTE,
+        displayName: "RemoteScout",
+        ownerPubkey,
+        isAgent: true,
+      },
+    ],
+    relayAgents: [
+      {
+        pubkey: REMOTE,
+        name: "RemoteScout",
+        ownerPubkey,
+        respondTo: "anyone",
+        channelNames: ["general"],
+      },
+    ],
+  });
+  expect(await forumAdds(page)).toEqual([]);
+  await dialog.getByRole("button", { name: "Invite", exact: true }).click();
+  await expect.poll(() => sent(page)).toEqual([[REMOTE]]);
+  expect(await forumAdds(page)).toEqual([
+    expect.objectContaining({
+      payload: {
+        channelId: FORUM,
+        pubkeys: [REMOTE],
+        role: "bot",
+      },
+    }),
+  ]);
   await assertNoLocalLifecycle(page);
 });
 

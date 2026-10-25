@@ -142,6 +142,7 @@ Controls which authors' events the harness forwards to the agent. Events from di
 |------|---------|---------|-------------|
 | `--respond-to` | `BUZZ_ACP_RESPOND_TO` | `owner-only` | Author gate mode: `owner-only`, `allowlist`, `anyone`, `nobody`. |
 | `--respond-to-allowlist` | `BUZZ_ACP_RESPOND_TO_ALLOWLIST` | — | Comma-separated 64-char hex pubkeys (required when mode is `allowlist`). Owner is always implicitly included. |
+| `--allow-shared-dms` | `BUZZ_ACP_ALLOW_SHARED_DMS` | `false` | Explicitly apply the configured `respond-to` policy to DM senders. Without this opt-in, DMs remain owner/sibling-only even under `anyone` or `allowlist`. |
 
 **Modes:**
 
@@ -178,7 +179,13 @@ buzz messages send --channel <channel-id> --reply-to <thread-root-id> \
   --mention <agent-pubkey> --content '!cancel'
 ```
 
-> **Note:** The default mode is `owner-only`. Agents without a registered `agent_owner_pubkey` will not respond to any events until the owner is resolved. Set `--respond-to anyone` to disable the gate entirely.
+> **Note:** The default mode is `owner-only`. Agents without a registered owner
+> will not respond until the owner is resolved. `--respond-to anyone` opens
+> channel conversations, not DMs. A deliberately shared community agent can use
+> `--respond-to anyone --allow-shared-dms` to accept DMs from workspace members
+> who can create or participate in a DM with it. Relay and channel membership
+> still gate delivery; `nobody` still denies everyone. This opt-in does not grant
+> owner control commands and is not enabled for personal agents automatically.
 
 **Examples:**
 

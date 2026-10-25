@@ -53,6 +53,7 @@ pub(crate) const RESERVED_ENV_KEYS: &[&str] = &[
     "BUZZ_ACP_RESPOND_TO",
     "BUZZ_ACP_RESPOND_TO_ALLOWLIST",
     "BUZZ_ACP_ALLOWED_RESPOND_TO",
+    "BUZZ_ACP_ALLOW_SHARED_DMS",
     "BUZZ_ACP_AGENT_OWNER",
     // Stable agent identity used for git attribution and private-conversation
     // provenance must come from the managed-agent record, not user overrides.

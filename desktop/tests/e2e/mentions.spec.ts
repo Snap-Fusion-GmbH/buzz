@@ -2660,6 +2660,69 @@ test("a send held open by a no-write step still revalidates at the publish bound
   }
 });
 
+for (const selection of ["keyboard", "pointer"] as const) {
+  test(`shared agents can be invited outside their existing channels (${selection})`, async ({
+    page,
+  }) => {
+    await installMockBridge(page, {
+      relayAgents: [
+        {
+          pubkey: ALLOWLIST_RELAY_AGENT_PUBKEY,
+          name: "OpenRouter Free Model",
+          respondTo: "anyone",
+          channelNames: ["general"],
+        },
+      ],
+    });
+    await page.goto("/");
+    await page.getByTestId("channel-random").click();
+    await expect(page.getByTestId("chat-title")).toHaveText("random");
+
+    const input = page.getByTestId("message-input");
+    await input.fill("@OpenRouter");
+    const suggestion = autocomplete(page).getByTestId(
+      `mention-suggestion-${ALLOWLIST_RELAY_AGENT_PUBKEY}`,
+    );
+    await expect(suggestion.getByText("not in channel")).toBeVisible();
+    if (selection === "keyboard") {
+      await input.press("Enter");
+    } else {
+      await suggestion
+        .getByRole("button", {
+          name: "Mention OpenRouter Free Model",
+          exact: true,
+        })
+        .click();
+    }
+    await page.keyboard.type("hello");
+    const content = "@OpenRouter Free Model hello";
+    await expect(input).toHaveText(content);
+    const baselinePayloadCount = (await readCommandPayloadLog(page)).length;
+    await page.getByTestId("send-message").click();
+    const invite = page.getByRole("button", { name: "Invite", exact: true });
+    await expect(invite).toBeVisible();
+    expect(
+      (await readCommandPayloadLog(page))
+        .slice(baselinePayloadCount)
+        .some((entry) => entry.command === "add_channel_members"),
+    ).toBe(false);
+    expect(await readOutgoingMentionPubkeys(page, content)).toBeNull();
+    await invite.click();
+    await expect
+      .poll(() => readOutgoingMentionPubkeys(page, content))
+      .toContain(ALLOWLIST_RELAY_AGENT_PUBKEY);
+    expect(
+      (await readCommandPayloadLog(page))
+        .slice(baselinePayloadCount)
+        .find((entry) => entry.command === "add_channel_members")?.payload,
+    ).toMatchObject({
+      channelId: "9dae0116-799b-5071-a0a8-fdd30a91a35d",
+      pubkeys: [ALLOWLIST_RELAY_AGENT_PUBKEY],
+      role: "bot",
+    });
+  });
+}
+
 test("selected relay agents are invited as bots before sending", async ({
   page,
 }) => {
@@ -2896,7 +2959,7 @@ test("owner-only builds show verified same-owner relay agents", async ({
   await expect(autocomplete(page).getByText("quinn")).toBeVisible();
 });
 
-test("relay-only allowlisted agents stay hidden outside their channel", async ({
+test("relay-only allowlisted agents offer Invite outside their channel", async ({
   page,
 }) => {
   await installMockBridge(page, {
@@ -2916,7 +2979,11 @@ test("relay-only allowlisted agents stay hidden outside their channel", async ({
 
   await page.getByTestId("message-input").fill("@quinn");
 
-  await expect(autocomplete(page)).toHaveCount(0);
+  const suggestion = autocomplete(page).getByTestId(
+    `mention-suggestion-${ALLOWLIST_RELAY_AGENT_PUBKEY}`,
+  );
+  await expect(suggestion.getByText("quinn", { exact: true })).toBeVisible();
+  await expect(suggestion.getByText("not in channel")).toBeVisible();
 });
 
 test("owner-only builds admit cross-owner relay agents authorized for anyone", async ({

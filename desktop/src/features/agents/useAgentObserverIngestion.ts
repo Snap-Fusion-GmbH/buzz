@@ -6,9 +6,8 @@ import {
   useRelayAgentsQuery,
 } from "@/features/agents/hooks";
 import { useManagedAgentObserverBridge } from "@/features/agents/observerRelayStore";
-import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { useIdentityQuery } from "@/shared/api/hooks";
-import type { ManagedAgent } from "@/shared/api/types";
+import type { ManagedAgent, RelayAgent } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 
 type IngestionAgent = Pick<ManagedAgent, "pubkey" | "status">;
@@ -17,16 +16,16 @@ type IngestionAgent = Pick<ManagedAgent, "pubkey" | "status">;
  * Combine locally managed agents with relay agents the current identity
  * declared-owns (NIP-OA `ownerPubkey == me`) into one ingestion list.
  *
- * Managed agents keep their real status; owned relay agents that are not
- * managed locally are treated as `deployed` so the observer subscription
- * starts and their frames decrypt. Registering non-owned agents would be
+ * Ownership comes from the verified relay directory, not a separate cached
+ * presentation-profile query. Managed agents keep their real status; owned relay
+ * agents that are not managed locally are treated as `deployed` so the observer
+ * subscription starts and their frames decrypt. Registering non-owned agents would be
  * pointless — observer frames are `#p`-addressed to the owner, so frames for
  * agents we do not own never arrive on our subscription in the first place.
  */
 export function combineObserverIngestionAgents(
   managedAgents: readonly IngestionAgent[],
-  relayAgentPubkeys: readonly string[],
-  ownerByPubkey: ReadonlyMap<string, string>,
+  relayAgents: readonly Pick<RelayAgent, "pubkey" | "ownerPubkey">[],
   currentPubkey: string | null | undefined,
 ): IngestionAgent[] {
   const managed = managedAgents.map((agent) => ({
@@ -42,13 +41,12 @@ export function combineObserverIngestionAgents(
   );
   const me = normalizePubkey(currentPubkey);
   const owned: IngestionAgent[] = [];
-  for (const pubkey of relayAgentPubkeys) {
+  for (const { pubkey, ownerPubkey } of relayAgents) {
     const key = normalizePubkey(pubkey);
     if (managedSet.has(key)) {
       continue;
     }
-    const owner = ownerByPubkey.get(key);
-    if (owner && normalizePubkey(owner) === me) {
+    if (ownerPubkey && normalizePubkey(ownerPubkey) === me) {
       owned.push({ pubkey, status: "deployed" as const });
     }
   }
@@ -81,35 +79,16 @@ export function useAgentObserverIngestion() {
   const managedAgents = managedAgentsQuery.data;
 
   const relayAgentsQuery = useRelayAgentsQuery();
-  const relayAgentPubkeys = React.useMemo(
-    () => (relayAgentsQuery.data ?? []).map((agent) => agent.pubkey),
-    [relayAgentsQuery.data],
+  const relayAgents = relayAgentsQuery.data;
+  const ingestionAgents = React.useMemo(
+    () =>
+      combineObserverIngestionAgents(
+        managedAgents ?? [],
+        relayAgents ?? [],
+        currentPubkey,
+      ),
+    [currentPubkey, managedAgents, relayAgents],
   );
-
-  const profilesQuery = useUsersBatchQuery(relayAgentPubkeys, {
-    enabled: Boolean(currentPubkey) && relayAgentPubkeys.length > 0,
-  });
-  const profiles = profilesQuery.data?.profiles;
-
-  const ingestionAgents = React.useMemo(() => {
-    const ownerByPubkey = new Map<string, string>();
-    for (const [pubkey, summary] of Object.entries(profiles ?? {})) {
-      if (summary.ownerPubkey) {
-        // Store both key and value normalized so lookups and ownership
-        // comparisons never depend on the casing the relay happened to send.
-        ownerByPubkey.set(
-          normalizePubkey(pubkey),
-          normalizePubkey(summary.ownerPubkey),
-        );
-      }
-    }
-    return combineObserverIngestionAgents(
-      managedAgents ?? [],
-      relayAgentPubkeys,
-      ownerByPubkey,
-      currentPubkey,
-    );
-  }, [currentPubkey, managedAgents, profiles, relayAgentPubkeys]);
 
   useManagedAgentObserverBridge(ingestionAgents);
   useActiveAgentTurnsBridge(ingestionAgents);

@@ -27,6 +27,19 @@ Implementation: `useCanonicalManagedAgentProfile` and `UserProfilePanel`.
 The obsolete historical-persona relay lookup and inactive-instance redirect
 helper have been removed instead of adding another exception flag.
 
+## Owner-scoped observer activity
+
+App-wide observer ingestion uses the verified owner returned by relay-agent
+discovery. It must not depend on a second presentation-profile cache: an older
+name/avatar summary can predate the ownership proof and silently discard frames
+even while the exact profile correctly says “managed by you.” Directory ownership
+changes update the trusted-agent set, including removing keys no longer owned.
+Unowned agents and frames whose author differs from the agent tag remain rejected.
+
+A relay-only agent with unknown runtime status can still publish owner-addressed,
+encrypted telemetry. Its Activity pane subscribes and waits for real frames;
+ownership does not fabricate runtime status, online presence, or local controls.
+
 ## Regression gates
 
 - `profile/lib/resolveCanonicalManagedAgent.test.mjs`: exact identity across
@@ -39,3 +52,6 @@ helper have been removed instead of adding another exception flag.
 - `tests/e2e/profile.spec.ts`: historical messages match the exact Instances
   selection rather than the current persona card; profile ingress parity.
 - `tests/e2e/identity-archive.spec.ts`: archive/unarchive authority and flair.
+- `agents/useAgentObserverIngestion.jsdom-test.mjs`: directory ownership changes,
+  stale presentation profiles, and live-frame trust enforcement.
+- `tests/e2e/exact-key-profile.spec.ts`: relay-only Activity without runtime status.

@@ -76,7 +76,10 @@ export function ManagedAgentSessionPanel({
   rawEventsOverride,
   transcriptOverride,
 }: ManagedAgentSessionPanelProps) {
-  const hasObserver = agent.status === "running" || agent.status === "deployed";
+  const hasObserver =
+    agent.status === "running" ||
+    agent.status === "deployed" ||
+    agent.status === "unknown";
   // Always read from the store — archived frames are ingested regardless of
   // live status and must be renderable for idle agents with channel history.
   // The `hasObserver` flag still gates the relay subscription (via the

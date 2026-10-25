@@ -18,7 +18,6 @@ describe("combineObserverIngestionAgents", () => {
     const result = combineObserverIngestionAgents(
       [{ pubkey: AGENT_LOCAL, status: "running" }],
       [],
-      new Map(),
       ME,
     );
     assert.deepEqual(result, [{ pubkey: AGENT_LOCAL, status: "running" }]);
@@ -27,8 +26,7 @@ describe("combineObserverIngestionAgents", () => {
   it("adds declared-owned relay agents as deployed", () => {
     const result = combineObserverIngestionAgents(
       [],
-      [AGENT_REMOTE],
-      new Map([[AGENT_REMOTE, ME]]),
+      [{ pubkey: AGENT_REMOTE, ownerPubkey: ME }],
       ME,
     );
     assert.deepEqual(result, [{ pubkey: AGENT_REMOTE, status: "deployed" }]);
@@ -37,8 +35,7 @@ describe("combineObserverIngestionAgents", () => {
   it("excludes relay agents owned by someone else", () => {
     const result = combineObserverIngestionAgents(
       [],
-      [AGENT_FOREIGN],
-      new Map([[AGENT_FOREIGN, OTHER]]),
+      [{ pubkey: AGENT_FOREIGN, ownerPubkey: OTHER }],
       ME,
     );
     assert.deepEqual(result, []);
@@ -47,8 +44,7 @@ describe("combineObserverIngestionAgents", () => {
   it("excludes relay agents with no declared owner", () => {
     const result = combineObserverIngestionAgents(
       [],
-      [AGENT_REMOTE],
-      new Map(),
+      [{ pubkey: AGENT_REMOTE, ownerPubkey: null }],
       ME,
     );
     assert.deepEqual(result, []);
@@ -57,8 +53,7 @@ describe("combineObserverIngestionAgents", () => {
   it("does not duplicate an agent that is both managed and on the relay", () => {
     const result = combineObserverIngestionAgents(
       [{ pubkey: AGENT_LOCAL, status: "stopped" }],
-      [AGENT_LOCAL],
-      new Map([[AGENT_LOCAL, ME]]),
+      [{ pubkey: AGENT_LOCAL, ownerPubkey: ME }],
       ME,
     );
     assert.deepEqual(result, [{ pubkey: AGENT_LOCAL, status: "stopped" }]);
@@ -67,8 +62,12 @@ describe("combineObserverIngestionAgents", () => {
   it("matches ownership case-insensitively", () => {
     const result = combineObserverIngestionAgents(
       [],
-      [AGENT_REMOTE.toUpperCase()],
-      new Map([[AGENT_REMOTE, ME.toUpperCase()]]),
+      [
+        {
+          pubkey: AGENT_REMOTE.toUpperCase(),
+          ownerPubkey: ME.toUpperCase(),
+        },
+      ],
       ME,
     );
     assert.deepEqual(result, [
@@ -79,8 +78,7 @@ describe("combineObserverIngestionAgents", () => {
   it("returns only managed agents when identity is not resolved yet", () => {
     const result = combineObserverIngestionAgents(
       [{ pubkey: AGENT_LOCAL, status: "running" }],
-      [AGENT_REMOTE],
-      new Map([[AGENT_REMOTE, ME]]),
+      [{ pubkey: AGENT_REMOTE, ownerPubkey: ME }],
       undefined,
     );
     assert.deepEqual(result, [{ pubkey: AGENT_LOCAL, status: "running" }]);

@@ -139,7 +139,9 @@ export function useAgentMentionRevalidation({
         fetchRelayAgents: (requestedPubkeys) =>
           revalidateRelayAgents(
             requestedPubkeys,
-            "channelId" in scope ? (scope.channelId ?? undefined) : undefined,
+            options.phase !== "prepare" && "channelId" in scope
+              ? (scope.channelId ?? undefined)
+              : undefined,
           ),
       });
     },

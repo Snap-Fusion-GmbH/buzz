@@ -8004,6 +8004,15 @@ async function handleAddChannelMembers(
 
     syncMockChannel(targetChannel);
     touchMockChannel(targetChannel);
+    for (const agent of mockRelayAgents) {
+      if (
+        added.includes(agent.pubkey) &&
+        !agent.channel_ids.includes(targetChannel.id)
+      ) {
+        agent.channel_ids.push(targetChannel.id);
+        agent.channels.push(targetChannel.name);
+      }
+    }
     syncMockRelayAgentsFromManagedAgents();
     return {
       added,

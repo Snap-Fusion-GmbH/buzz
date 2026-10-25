@@ -307,12 +307,19 @@ with a TypeScript lookup table or an id comparison in a component.
    inline in the over-1000-line dialogs.
 
 16. **Owner-only builds constrain managed runtimes, not relay-agent mentions.**
+    Desktop-managed launches explicitly disable `BUZZ_ACP_ALLOW_SHARED_DMS` and
+    reserve it against saved, inherited, and baked overrides. Standalone community
+    deployments may explicitly opt in to sharing DMs under their `respond_to`
+    policy; personal agents keep the default owner/sibling-only DM gate.
     The compiled owner-only capability applies when Desktop starts or deploys a
     managed agent. Independently operated relay agents with NIP-OA ownership
     remain eligible in every build when their verified owner's signed
     `respond_to` policy admits the viewer and relay membership includes the
-    target channel at publication. Owned nonmembers may be offered for preparation
-    and Invite; this is not permission to publish. Final authorization refreshes
+    target channel at publication. Owned nonmembers and shared agents whose
+    policy admits the viewer may be offered for preparation and explicit Invite
+    in stream/forum channels. Preparation refreshes the viewer-visible directory;
+    this is not membership or permission to publish. DM discovery remains
+    owner-scoped. Final authorization refreshes
     the exact destination and retains captured selected identities across uploads
     and edits. Denial preserves the draft, never silently removes a selected key.
     See `docs/remote-mention-routing.md`. Marked builds require that verified owner coordinate but do

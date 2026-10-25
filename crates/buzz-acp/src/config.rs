@@ -485,6 +485,10 @@ pub struct CliArgs {
     )]
     pub respond_to: RespondTo,
 
+    /// Apply respond-to policy inside DMs instead of restricting them to the owner.
+    #[arg(long, env = "BUZZ_ACP_ALLOW_SHARED_DMS", default_value_t = false)]
+    pub allow_shared_dms: bool,
+
     /// Comma-separated 64-char hex pubkeys for allowlist mode.
     /// Owner pubkey is always implicitly included.
     #[arg(long, env = "BUZZ_ACP_RESPOND_TO_ALLOWLIST", value_delimiter = ',')]
@@ -598,6 +602,8 @@ pub struct Config {
     pub permission_mode: PermissionMode,
     /// Inbound author gate mode.
     pub respond_to: RespondTo,
+    /// Whether DMs use the configured author policy rather than owner-only access.
+    pub allow_shared_dms: bool,
     /// Validated allowlist of pubkey hex strings (used when respond_to == Allowlist).
     pub respond_to_allowlist: HashSet<String>,
     /// Allowed `respond_to` modes. Empty = all modes allowed.
@@ -1225,6 +1231,7 @@ impl Config {
                 .and_then(sanitize_session_title),
             permission_mode: args.permission_mode,
             respond_to: args.respond_to,
+            allow_shared_dms: args.allow_shared_dms,
             respond_to_allowlist,
             allowed_respond_to,
             persona_env_vars,
@@ -1258,7 +1265,7 @@ impl Config {
             format!(" allowed_respond_to=[{}]", modes.join(","))
         };
         format!(
-            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} idle_timeout={}s max_turn={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} session_policy={} meh={:?} ignore_self={} context_limit={} max_turns_per_session={} presence={} typing={} memory={} model={} permission_mode={} {}{}",
+            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} idle_timeout={}s max_turn={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} session_policy={} meh={:?} ignore_self={} context_limit={} max_turns_per_session={} presence={} typing={} memory={} model={} permission_mode={} {}{} shared_dms={}",
             self.relay_url,
             self.keys.public_key().to_hex(),
             self.agent_command,
@@ -1282,6 +1289,7 @@ impl Config {
             self.permission_mode,
             respond_to_detail,
             allowed_respond_to_detail,
+            self.allow_shared_dms,
         )
     }
 }
@@ -1603,6 +1611,7 @@ mod tests {
             session_title: None,
             permission_mode: PermissionMode::BypassPermissions,
             respond_to: RespondTo::Anyone,
+            allow_shared_dms: false,
             respond_to_allowlist: HashSet::new(),
             allowed_respond_to: Vec::new(),
             persona_env_vars: vec![],
@@ -3003,6 +3012,21 @@ channels = "ALL"
     // A minimal valid private key for test use (secp256k1 scalar = 1).
     const TEST_PRIVATE_KEY: &str =
         "0000000000000000000000000000000000000000000000000000000000000001";
+
+    #[test]
+    fn shared_dm_access_requires_explicit_opt_in() {
+        for (flags, expected) in [(vec![], false), (vec!["--allow-shared-dms"], true)] {
+            let args = CliArgs::try_parse_from(
+                ["buzz-acp", "--private-key", TEST_PRIVATE_KEY]
+                    .into_iter()
+                    .chain(flags),
+            )
+            .expect("parse shared DM access");
+            let config = Config::from_args(args).expect("configure shared DM access");
+            assert_eq!(config.allow_shared_dms, expected);
+            assert!(config.summary().contains(&format!("shared_dms={expected}")));
+        }
+    }
 
     #[test]
     fn allowed_respond_to_full_path_rejects_disallowed_mode() {
