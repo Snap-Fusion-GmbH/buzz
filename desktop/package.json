@@ -8,6 +8,7 @@
     "build": "tsc && node ./scripts/build-protected-feature-artifacts.mjs",
     "build:e2e": "tsc && vite build --mode e2e",
     "typecheck": "tsc --noEmit",
+    "icons:generate": "node ./scripts/generate-native-icons.mjs",
     "check:file-sizes": "node ./scripts/check-file-sizes.mjs",
     "check:px-text": "node ./scripts/check-px-text.mjs",
     "check:pubkey-truncation": "node ./scripts/check-pubkey-truncation.mjs",
