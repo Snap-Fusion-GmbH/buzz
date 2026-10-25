@@ -8,8 +8,8 @@ import {
   TEST_IDENTITIES,
 } from "../helpers/bridge";
 import { expectEmojiMartStylesInstalled } from "../helpers/css";
-import { invokeMockCommand } from "../helpers/welcomeTeam";
 import { installFakeCamera } from "../helpers/fakeCamera";
+import { invokeMockCommand } from "../helpers/mockCommands";
 import {
   E2E_IDENTITY_OVERRIDE_STORAGE_KEY,
   seedActiveIdentity,
