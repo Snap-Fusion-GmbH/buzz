@@ -1,7 +1,7 @@
 # Managed fork migration compatibility
 
 The managed fork and upstream allocated migration version 67 independently.
-The managed fork already shipped
+The managed fork already assigned that version to
 `0067_live_dm_participant_uniqueness.sql`, so its version and contents must stay
 unchanged for existing managed databases.
 
