@@ -3039,6 +3039,7 @@ test("first-run onboarding retires the seeded welcome channels", async ({
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await installMockBridge(page, undefined, { skipOnboardingSeed: true });
   await page.goto("/");
+  await expect(page.getByTestId("onboarding-page-1")).toBeVisible();
 
   // The mock still seeds the channels an earlier release created.
   for (const channelId of [
