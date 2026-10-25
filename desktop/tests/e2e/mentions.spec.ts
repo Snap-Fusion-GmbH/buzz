@@ -3368,7 +3368,7 @@ test("a detached start fired before a real community switch fails closed and kee
           pubkey: IN_CHANNEL_MANAGED_AGENT_PUBKEY,
           name: "fizz",
           status: "stopped",
-          channelNames: ["general"],
+          channelNames: ["engineering"],
         },
       ],
       // Holds the start open long enough for the real switch below to
@@ -3386,8 +3386,8 @@ test("a detached start fired before a real community switch fails closed and kee
     { list: [COMMUNITY_A, COMMUNITY_B], active: COMMUNITY_A.id },
   );
   await page.goto("/");
-  await page.getByTestId("channel-general").click();
-  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await page.getByTestId("channel-engineering").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("engineering");
 
   const input = page.getByTestId("message-input");
   await input.fill("Hey @fizz");
@@ -3454,7 +3454,7 @@ test("a detached start fired before a real community switch fails closed and kee
   // snapshots, not retrying toHaveCount(0) assertions — a retry would simply
   // wait out the toast's auto-dismiss and pass against the very toast it
   // forbids.
-  await expect(page.getByTestId("channel-general")).toBeVisible();
+  await expect(page.getByTestId("channel-engineering")).toBeVisible();
   expect(
     await page.getByText("Could not start fizz", { exact: false }).count(),
   ).toBe(0);
@@ -3495,7 +3495,7 @@ test("a deploy held across an A→B→A community round-trip is not fired twice"
           pubkey: OUT_OF_CHANNEL_PROVIDER_AGENT_PUBKEY,
           name: "portal",
           status: "not_deployed",
-          channelNames: ["general"],
+          channelNames: ["engineering"],
           backend: {
             type: "provider",
             id: "portal",
@@ -3523,8 +3523,8 @@ test("a deploy held across an A→B→A community round-trip is not fired twice"
     { list: [COMMUNITY_A, COMMUNITY_B], active: COMMUNITY_A.id },
   );
   await page.goto("/");
-  await page.getByTestId("channel-general").click();
-  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await page.getByTestId("channel-engineering").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("engineering");
 
   const sendMention = async (text: string) => {
     const input = page.getByTestId("message-input");
@@ -3575,8 +3575,8 @@ test("a deploy held across an A→B→A community round-trip is not fired twice"
   await expect(
     page.getByTestId(`community-rail-button-${COMMUNITY_A.id}`),
   ).toHaveAttribute("aria-current", "true");
-  await page.getByTestId("channel-general").click();
-  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await page.getByTestId("channel-engineering").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("engineering");
 
   // Back in A, the held deploy's scope is valid again and the record still
   // reads `not_deployed`, so this send queues a wake — the retained map entry

@@ -3041,8 +3041,18 @@ test("first-run onboarding retires the seeded welcome channels", async ({
   await page.goto("/");
 
   // The mock still seeds the channels an earlier release created.
-  await expect(page.getByTestId("channel-general")).toBeVisible();
-  await expect(page.getByTestId("channel-welcome-everyone")).toBeVisible();
+  for (const channelId of [
+    "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50",
+    "5f0b1b3c-2a37-5366-9b8c-31a4b21d8e77",
+  ]) {
+    await invokeMockCommand(page, "join_channel", { channelId });
+  }
+  const beforeRetirement = await invokeMockCommand<{
+    channels: { name: string }[];
+  }>(page, "get_channels");
+  expect(beforeRetirement.channels.map((channel) => channel.name)).toEqual(
+    expect.arrayContaining(["general", "welcome-everyone"]),
+  );
 
   await page.getByTestId("onboarding-display-name").fill("Morty QA");
   await completeProfileOnboarding(page);
@@ -3432,7 +3442,7 @@ test("same-relay identity replacement rebuilds the community boundary (A→B→A
   // Two full boots (denied-A → imported-B, then relaunch-as-A) plus draft
   // flush polling exceed the default budget.
   test.slow();
-  const GENERAL_CHANNEL_ID = "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50";
+  const ENGINEERING_CHANNEL_ID = "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9";
   const DRAFT_STORE_KEY_PREFIX = "buzz-drafts.v2";
   // Mirrors the bridge's DEFAULT_RELAY_WS_URL and useDrafts'
   // canonicalizeRelayScope (scheme://host, no trailing slash).
@@ -3476,7 +3486,7 @@ test("same-relay identity replacement rebuilds the community boundary (A→B→A
         }),
       );
     },
-    [tylerDraftStoreKey, GENERAL_CHANNEL_ID] as const,
+    [tylerDraftStoreKey, ENGINEERING_CHANNEL_ID] as const,
   );
 
   await page.getByTestId("onboarding-display-name").fill("Morty QA");
@@ -3544,7 +3554,7 @@ test("same-relay identity replacement rebuilds the community boundary (A→B→A
 
   // Leg 2 — alice opens the channel tyler's seeded draft targets: the
   // composer must not restore another identity's draft.
-  await page.getByTestId("channel-general").click();
+  await page.getByTestId("channel-engineering").click();
   const composerInput = page.getByTestId("message-input");
   await expect(composerInput).toBeVisible();
   await expect(composerInput).not.toContainText("tyler private draft");
@@ -3578,7 +3588,7 @@ test("same-relay identity replacement rebuilds the community boundary (A→B→A
   // send succeeds. The mock's send handler asserts the frontend-captured
   // signer against the active identity, so a send that still carried tyler's
   // cached identity would be rejected and never render.
-  await page.getByTestId("channel-general").click();
+  await page.getByTestId("channel-engineering").click();
   await expect(composerInput).toContainText("alice draft after import");
   await composerInput.fill("hello from alice");
   await composerInput.press("Enter");
@@ -3588,8 +3598,7 @@ test("same-relay identity replacement rebuilds the community boundary (A→B→A
   // Leg 4 — A restoration: relaunch as tyler (fully onboarded this time,
   // open relay) on the same relay. Tyler's bucket must restore tyler's
   // draft untouched by alice's session, and alice's draft must stay in
-  // alice's bucket. Tyler is not a member of the mock starter channels, so
-  // reach general through the channel browser.
+  // alice's bucket.
   await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installMockBridge(page);
   await page.goto("/");
@@ -3597,10 +3606,10 @@ test("same-relay identity replacement rebuilds the community boundary (A→B→A
   await openChannelBrowser(page);
   await expect(page.getByTestId("channel-browser-dialog")).toBeVisible();
   await page
-    .getByTestId("browse-channel-general")
+    .getByTestId("browse-channel-engineering")
     .getByRole("button", { name: "Join" })
     .click();
-  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await expect(page.getByTestId("chat-title")).toHaveText("engineering");
   await expect(composerInput).toContainText("tyler private draft");
   await expect(composerInput).not.toContainText("alice draft after import");
 });
