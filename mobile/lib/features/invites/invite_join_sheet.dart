@@ -13,7 +13,7 @@ Future<bool?> showInviteJoinSheet(BuildContext context) {
     context: context,
     isScrollControlled: true,
     // The route remains a normal modal while idle, but its contents install a
-    // PopScope once a membership claim or starter setup begins. Keep drag and
+    // PopScope once a membership claim or welcome retirement begins. Keep drag and
     // the shared close affordance out of this sheet so they cannot bypass that
     // in-flight guard.
     enableDrag: false,
@@ -56,11 +56,7 @@ class InviteJoinSheet extends ConsumerWidget {
     };
 
     if (state.status == InviteJoinStatus.success) {
-      return _InviteJoinSuccess(
-        host: host,
-        communityName: derivedName,
-        hasFocusChannel: state.focusChannelId != null,
-      );
+      return _InviteJoinSuccess(host: host, communityName: derivedName);
     }
 
     return SafeArea(
@@ -115,7 +111,7 @@ class InviteJoinSheet extends ConsumerWidget {
             const SizedBox(height: Grid.sm),
             if (isStarterSetupRecovery) ...[
               Text(
-                'Your membership is ready, but starter channels still need to be set up. You can safely retry without claiming the invite again.',
+                'Your membership is ready, but the legacy welcome channels still need to be retired. You can safely retry without claiming the invite again.',
                 style: context.textTheme.bodyMedium?.copyWith(
                   color: context.colors.onSurfaceVariant,
                 ),
@@ -184,13 +180,8 @@ class InviteJoinSheet extends ConsumerWidget {
 class _InviteJoinSuccess extends StatelessWidget {
   final String host;
   final String? communityName;
-  final bool hasFocusChannel;
 
-  const _InviteJoinSuccess({
-    required this.host,
-    required this.hasFocusChannel,
-    this.communityName,
-  });
+  const _InviteJoinSuccess({required this.host, this.communityName});
 
   @override
   Widget build(BuildContext context) {
@@ -233,10 +224,8 @@ class _InviteJoinSuccess extends StatelessWidget {
             ),
             const SizedBox(height: Grid.xs),
             TextButton(
-              onPressed: () => Navigator.of(context).pop(hasFocusChannel),
-              child: Text(
-                hasFocusChannel ? 'Continue to #welcome-everyone' : 'Not now',
-              ),
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Not now'),
             ),
           ],
         ),

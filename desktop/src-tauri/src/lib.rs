@@ -312,6 +312,14 @@ pub fn run() {
                     .keyring_locked
                     .load(std::sync::atomic::Ordering::Acquire);
 
+            // Remove the agent instances older builds provisioned for the
+            // retired Welcome Team. This runs after identity resolution so the
+            // records can be deleted with their keys and tombstones durably
+            // queued, and before agent restore so they cannot be spawned.
+            if !recovery_mode {
+                migration::retire_welcome_agents(&app_handle);
+            }
+
             // Backfill the pinned persona snapshot for any pre-existing agent
             // that predates the record-authoritative-spawn cutover (persona_id
             // set but no source_version). Must run before
@@ -636,7 +644,7 @@ pub fn run() {
             get_channels,
             get_open_channel_directory,
             create_channel,
-            ensure_starter_channels,
+            retire_welcome_channels,
             open_dm,
             get_bestie_assignment,
             assign_bestie,

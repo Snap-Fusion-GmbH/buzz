@@ -685,9 +685,7 @@ test("relay onboarding: profile and avatar docked CTAs", async ({ page }) => {
   await page.screenshot({ path: `${SHOT_DIR}/05-avatar.png` });
 });
 
-test("community onboarding: profile and starter-team cards", async ({
-  page,
-}) => {
+test("community onboarding: profile setup", async ({ page }) => {
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await page.addInitScript(
     ({ pubkey, transactionStorageKey }) => {
@@ -736,10 +734,5 @@ test("community onboarding: profile and starter-team cards", async ({
 
   await page.getByTestId("community-profile-name-key").fill("Ada Lovelace");
   await page.getByTestId("community-profile-next").click();
-  await expect(
-    page.getByRole("heading", { name: "Meet your starter team" }),
-  ).toBeVisible();
-  await expectSharedCardGeometry(page);
-  await waitForAnimations(page);
-  await page.screenshot({ path: `${SHOT_DIR}/07-starter-team.png` });
+  await expect(page.getByTestId("community-onboarding-flow")).toHaveCount(0);
 });

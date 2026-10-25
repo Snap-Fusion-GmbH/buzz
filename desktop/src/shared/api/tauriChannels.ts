@@ -174,17 +174,25 @@ export async function createChannel(
   return channel;
 }
 
-export async function ensureStarterChannels(): Promise<Channel[]> {
+/**
+ * Leave or delete the channels earlier releases seeded on a fresh install.
+ * Reports every channel it retired even when a later step fails, so the roster
+ * cache is refreshed for the writes that landed.
+ */
+export async function retireWelcomeChannels(): Promise<{
+  retiredChannelIds: string[];
+  error: string | null;
+}> {
   const record = beginChannelMembershipWrite();
-  // Channels created or joined are reported even when a later step fails.
   const result = await invokeTauri<{
-    channels: RawChannel[];
-    changed_channel_ids: string[];
+    retired_channel_ids: string[];
     error: string | null;
-  }>("ensure_starter_channels");
-  for (const id of result.changed_channel_ids) record(id);
-  if (result.error !== null) throw toTauriError(result.error);
-  return result.channels.map(fromRawChannel);
+  }>("retire_welcome_channels");
+  for (const id of result.retired_channel_ids) record(id);
+  return {
+    retiredChannelIds: result.retired_channel_ids,
+    error: result.error,
+  };
 }
 
 /**

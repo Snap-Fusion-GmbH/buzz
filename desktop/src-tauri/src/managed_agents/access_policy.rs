@@ -27,12 +27,10 @@
 //! The harness gate this projection targets admits the human owner *and* every
 //! cryptographically NIP-OA-verified agent that shares that owner (see
 //! `crates/buzz-acp/src/lib.rs`). That is the intended boundary, not an
-//! oversight: an owner's own agents are inside their trust boundary, and Buzz's
-//! built-in Welcome team relies on it, because the lead instructs its teammates
-//! while every teammate is created owner-only (see
-//! `welcomeTeammateHasExpectedAccess` in
-//! `desktop/src/features/onboarding/welcomeGuide.ts`). Read every use of
-//! "owner-only" in this module as `owner ∪ verified same-owner agents`. The
+//! oversight: an owner's own agents are inside their trust boundary, and a
+//! multi-agent setup may rely on one sibling instructing another while every
+//! agent is created owner-only. Read every use of "owner-only" in this module
+//! as `owner ∪ verified same-owner agents`. The
 //! setting's own copy says so: the line under Only me reads "Only you and your
 //! agents can send instructions." (`RespondToField.tsx`). The dropdown label
 //! stays "Only me", which is the audience the user picks.

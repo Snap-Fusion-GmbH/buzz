@@ -4,7 +4,7 @@ use tauri::AppHandle;
 
 use crate::{managed_agents::AgentDefinition, util::now_iso};
 
-struct BuiltInPersona {
+struct RetiredPersonaSeed {
     id: &'static str,
     display_name: &'static str,
     avatar_url: Option<&'static str>,
@@ -35,8 +35,8 @@ pub(crate) const POLLEN_LEGACY_SYSTEM_PROMPT: &str = "You are Bumble, a curious 
 // product name everywhere it is consumed.
 const POLLEN_AVATAR: &str = BUMBLE_AVATAR;
 
-const BUILT_IN_PERSONAS: &[BuiltInPersona] = &[
-    BuiltInPersona {
+const RETIRED_BUILT_IN_PERSONAS: &[RetiredPersonaSeed] = &[
+    RetiredPersonaSeed {
         id: "builtin:fizz",
         display_name: "Fizz",
         avatar_url: Some(FIZZ_AVATAR),
@@ -49,7 +49,7 @@ const BUILT_IN_PERSONAS: &[BuiltInPersona] = &[
         runtime: None,
         default_active: true,
     },
-    BuiltInPersona {
+    RetiredPersonaSeed {
         id: "builtin:honey",
         display_name: "Honey",
         avatar_url: Some(HONEY_AVATAR),
@@ -59,7 +59,7 @@ const BUILT_IN_PERSONAS: &[BuiltInPersona] = &[
         runtime: None,
         default_active: true,
     },
-    BuiltInPersona {
+    RetiredPersonaSeed {
         id: POLLEN_PERSONA_ID,
         display_name: POLLEN_DISPLAY_NAME,
         avatar_url: Some(POLLEN_AVATAR),
@@ -72,7 +72,7 @@ const BUILT_IN_PERSONAS: &[BuiltInPersona] = &[
 ];
 
 pub(crate) fn built_in_persona_avatar_url(id: &str) -> Option<&'static str> {
-    BUILT_IN_PERSONAS
+    RETIRED_BUILT_IN_PERSONAS
         .iter()
         .find(|persona| persona.id == id)
         .and_then(|persona| persona.avatar_url)
@@ -117,11 +117,8 @@ const RETIRED_PERSONAS: &[(&str, &str)] = &[
     ),
 ];
 
-fn built_in_persona_records(now: &str) -> Vec<AgentDefinition> {
-    if !super::starter_defaults::enabled() {
-        return Vec::new();
-    }
-    BUILT_IN_PERSONAS
+fn retired_builtin_persona_records(now: &str) -> Vec<AgentDefinition> {
+    RETIRED_BUILT_IN_PERSONAS
         .iter()
         .map(|persona| AgentDefinition {
             id: persona.id.to_string(),
@@ -152,14 +149,14 @@ fn built_in_persona_records(now: &str) -> Vec<AgentDefinition> {
         .collect()
 }
 
-pub(crate) fn built_in_persona_definition(id: &str, now: &str) -> Option<AgentDefinition> {
-    built_in_persona_records(now)
+pub(crate) fn retired_builtin_persona_definition(id: &str, now: &str) -> Option<AgentDefinition> {
+    retired_builtin_persona_records(now)
         .into_iter()
         .find(|persona| persona.id == id)
 }
 
 fn built_in_order(id: &str) -> Option<usize> {
-    BUILT_IN_PERSONAS
+    RETIRED_BUILT_IN_PERSONAS
         .iter()
         .position(|persona| persona.id == id)
 }
@@ -189,29 +186,26 @@ fn sort_personas(records: &mut [AgentDefinition]) {
 fn merge_personas(mut stored: Vec<AgentDefinition>, now: &str) -> (Vec<AgentDefinition>, bool) {
     let mut changed = false;
 
-    for built_in in built_in_persona_records(now) {
-        if let Some(existing) = stored.iter_mut().find(|record| record.id == built_in.id) {
-            if !existing.is_builtin {
-                existing.is_builtin = true;
-                changed = true;
-            }
-        } else {
-            stored.push(built_in);
-            changed = true;
-        }
-    }
-
-    // Demote any stored persona still flagged as built-in whose id is no
-    // longer in BUILT_IN_PERSONAS (e.g. a built-in that has been retired).
-    // The record stays so existing managed-agent and team references keep
-    // working; the user can delete it from the catalog like any custom
-    // persona once they no longer need it.
+    // Built-in personas have been retired. Keep any stored record so existing
+    // managed agents and teams still resolve their instructions, but remove it
+    // from the default catalog: it is no longer built-in. The three former
+    // starter agents also leave My Agents; older retired seeds are handled by
+    // `migrate_retired_personas` below.
     for record in stored.iter_mut() {
-        if record.is_builtin && built_in_order(&record.id).is_none() {
-            record.is_builtin = false;
-            record.updated_at = now.to_string();
-            changed = true;
+        let is_retired_starter = RETIRED_BUILT_IN_PERSONAS
+            .iter()
+            .any(|seed| seed.id == record.id);
+        let was_builtin = record.is_builtin;
+        let was_active = record.is_active;
+        if !(was_builtin || is_retired_starter && was_active) {
+            continue;
         }
+        record.is_builtin = false;
+        if is_retired_starter {
+            record.is_active = false;
+        }
+        record.updated_at = now.to_string();
+        changed = true;
     }
 
     // Soft-deprecate retired built-in personas that were replaced by

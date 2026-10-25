@@ -289,15 +289,74 @@ fn starter_channel_uuid_is_stable_and_scoped() {
 }
 
 #[test]
-fn duplicate_channel_rejection_is_ensure_success_only() {
-    assert!(is_duplicate_channel_rejection(
-        "relay rejected event: duplicate: channel already exists"
+fn private_welcome_retirement_requires_private_stream_membership() {
+    let mut channel = make_channel("chan-1", " Welcome ", None);
+    channel.visibility = "private".to_string();
+
+    assert!(is_retired_private_welcome(&channel));
+
+    channel.visibility = "open".to_string();
+    assert!(!is_retired_private_welcome(&channel));
+
+    channel.visibility = "private".to_string();
+    channel.channel_type = "forum".to_string();
+    assert!(!is_retired_private_welcome(&channel));
+
+    channel.channel_type = "stream".to_string();
+    channel.archived_at = Some("2026-07-16T00:00:00Z".to_string());
+    assert!(!is_retired_private_welcome(&channel));
+
+    channel.archived_at = None;
+    channel.is_member = false;
+    assert!(!is_retired_private_welcome(&channel));
+}
+
+fn roster_member(pubkey: &str, role: &str, is_agent: bool) -> crate::models::ChannelMemberInfo {
+    crate::models::ChannelMemberInfo {
+        pubkey: pubkey.to_string(),
+        role: role.to_string(),
+        is_agent,
+        joined_at: None,
+        display_name: None,
+    }
+}
+
+#[test]
+fn private_welcome_is_deleted_only_for_a_solo_owner() {
+    let channel = {
+        let mut channel = make_channel("chan-1", "Welcome", None);
+        channel.visibility = "private".to_string();
+        channel
+    };
+
+    // Solo owner: this identity created the channel and is the only human.
+    assert!(may_delete_private_welcome(
+        &channel,
+        &[
+            roster_member("actor", "owner", false),
+            roster_member("agent-1", "bot", true),
+        ],
+        "actor",
     ));
-    assert!(!is_duplicate_channel_rejection(
-        "relay rejected event: auth: not authorized"
+
+    // Someone else's Welcome: deleting it would destroy their channel.
+    assert!(!may_delete_private_welcome(
+        &channel,
+        &[
+            roster_member("someone-else", "owner", false),
+            roster_member("actor", "member", false)
+        ],
+        "actor",
     ));
-    assert!(!is_duplicate_channel_rejection(
-        "duplicate: unrelated local error"
+
+    // Owner, but another human joined: the shared channel must survive.
+    assert!(!may_delete_private_welcome(
+        &channel,
+        &[
+            roster_member("actor", "owner", false),
+            roster_member("human-2", "member", false)
+        ],
+        "actor",
     ));
 }
 
@@ -424,42 +483,6 @@ fn hash_is_stable_for_same_input() {
         first, second,
         "hash must be deterministic and ignore last_message_at"
     );
-}
-
-#[test]
-fn starter_match_requires_open_unarchived_stream_by_normalized_name() {
-    let spec = &STARTER_CHANNELS[0];
-    let mut channel = ChannelInfo {
-        id: "chan-1".to_string(),
-        name: " General ".to_string(),
-        channel_type: "stream".to_string(),
-        visibility: "open".to_string(),
-        description: "".to_string(),
-        topic: None,
-        purpose: None,
-        member_count: 0,
-        member_pubkeys: Vec::new(),
-        last_message_at: None,
-        archived_at: None,
-        participants: Vec::new(),
-        participant_pubkeys: Vec::new(),
-        is_member: true,
-        ttl_seconds: None,
-        ttl_deadline: None,
-    };
-
-    assert!(is_matching_starter_channel(&channel, spec));
-
-    channel.visibility = "private".to_string();
-    assert!(!is_matching_starter_channel(&channel, spec));
-
-    channel.visibility = "open".to_string();
-    channel.channel_type = "forum".to_string();
-    assert!(!is_matching_starter_channel(&channel, spec));
-
-    channel.channel_type = "stream".to_string();
-    channel.archived_at = Some("2026-07-16T00:00:00Z".to_string());
-    assert!(!is_matching_starter_channel(&channel, spec));
 }
 
 #[test]

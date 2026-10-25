@@ -59,7 +59,7 @@ globalThis.window = {
 const { addChannelMembers, joinChannel, getChannelMembers } = await import(
   "@/shared/api/tauri"
 );
-const { ensureStarterChannels, syncAgentsToActiveHuddle } = await import(
+const { retireWelcomeChannels, syncAgentsToActiveHuddle } = await import(
   "@/shared/api/tauriChannels"
 );
 const { resolveBestieConversation } = await import(
@@ -213,17 +213,15 @@ async function cacheOldRoster(roster) {
   return unmount;
 }
 
-test("starter joins that landed are recorded when a later join fails", async () => {
-  const roster = setup("starter-general");
+test("welcome retirements that landed are recorded when a later step fails", async () => {
+  const roster = setup("retired-welcome");
   const unmount = await cacheOldRoster(roster);
-  nativeResults.ensure_starter_channels = {
-    channels: [],
-    changed_channel_ids: ["starter-general"],
-    error: "starter join rejected",
+  nativeResults.retire_welcome_channels = {
+    retired_channel_ids: ["retired-welcome"],
+    error: "welcome leave rejected",
   };
-  await assert.rejects(ensureStarterChannels(), {
-    message: "starter join rejected",
-  });
+  const result = await retireWelcomeChannels();
+  assert.equal(result.error, "welcome leave rejected");
   await settle();
   assert.deepEqual(roster.shown(), [OWNER, BOT]);
   unmount();

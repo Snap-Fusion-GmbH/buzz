@@ -190,6 +190,26 @@ fn run_boot_migrations_inner(app: &tauri::AppHandle, reset_completed: bool) {
     materialize_agent_runtimes(app);
 }
 
+/// Retire the agent instances that older builds created for the Welcome Team.
+/// Runs after identity resolution so removed records can also have their keys
+/// deleted and tombstones enqueued.
+pub(crate) fn retire_welcome_agents(app: &tauri::AppHandle) {
+    let Ok(base_dir) = crate::managed_agents::managed_agents_base_dir(app) else {
+        return;
+    };
+    match retired_welcome_agents::remove_retired_welcome_agents_in_dir(&base_dir) {
+        Ok(pubkeys) if pubkeys.is_empty() => {}
+        Ok(pubkeys) => {
+            retired_welcome_agents::finish_retired_welcome_agents(app, &pubkeys);
+            eprintln!(
+                "buzz-desktop: retired-welcome-agents: removed {} starter instance(s)",
+                pubkeys.len()
+            );
+        }
+        Err(error) => eprintln!("buzz-desktop: retired-welcome-agents: {error}"),
+    }
+}
+
 /// Copy one-time app state from the legacy app identifier directory to
 /// the current Buzz identifier directory. The Tauri identifier controls the app
 /// data path, so without this copy a product rename would look like a fresh
@@ -741,7 +761,7 @@ fn built_in_persona_version_update(
     now: &str,
 ) -> Option<(String, String)> {
     let mut current =
-        crate::managed_agents::built_in_persona_definition(&legacy_match.persona_id, now)?;
+        crate::managed_agents::retired_builtin_persona_definition(&legacy_match.persona_id, now)?;
     let new_version = crate::managed_agents::persona_events::persona_content_hash(
         &crate::managed_agents::persona_events::persona_event_content(&current),
     );
@@ -1395,6 +1415,7 @@ mod backfill;
 pub use backfill::backfill_standalone_agents;
 mod detach;
 mod pollen;
+mod retired_welcome_agents;
 mod team_membership;
 pub(crate) use pollen::*;
 mod team_suffix;

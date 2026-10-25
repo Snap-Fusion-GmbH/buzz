@@ -141,7 +141,7 @@ fn migrate_personas_in_dir_at(
     let mut migrated = 0u32;
 
     for record in &records {
-        // Skip built-in personas — they're always available from code.
+        // Built-in personas are legacy migration records only; never publish them.
         if record.is_builtin {
             continue;
         }

@@ -386,8 +386,13 @@ type E2eConfig = {
     channelsReadErrors?: (string | null)[];
     /** Reject successive mock `create_channel` calls, then resume. */
     createChannelErrors?: string[];
-    /** Reject successive mock `ensure_starter_channels` calls, then resume. */
-    ensureStarterChannelsErrors?: string[];
+    /** Reject successive mock `retire_welcome_channels` calls, then resume. */
+    retireWelcomeChannelsErrors?: string[];
+    /**
+     * Keep the legacy seeded channels instead of retiring them. Specs that
+     * browse the seeded directory need them to remain visible.
+     */
+    keepSeededWelcomeChannels?: boolean;
     /** Reject successive mock `join_channel` calls, then resume. */
     joinChannelErrors?: string[];
     channelsReadDelayMs?: number;
@@ -7248,37 +7253,31 @@ async function handleGetPresence(
   return result;
 }
 
-async function handleEnsureStarterChannels(
+async function handleRetireWelcomeChannels(
   config: E2eConfig | undefined,
 ): Promise<{
-  channels: RawChannelWithMembership[];
-  changed_channel_ids: string[];
-  error: null;
+  retired_channel_ids: string[];
+  error: string | null;
 }> {
-  const starterChannelError =
-    config?.mock?.ensureStarterChannelsErrors?.shift();
-  if (starterChannelError) {
-    throw new Error(starterChannelError);
+  const retirementError = config?.mock?.retireWelcomeChannelsErrors?.shift();
+  if (retirementError) {
+    throw new Error(retirementError);
+  }
+
+  if (config?.mock?.keepSeededWelcomeChannels) {
+    return { retired_channel_ids: [], error: null };
   }
 
   const currentPubkey = getMockMemberPubkey(config);
-  const changedChannelIds: string[] = [];
-  const ensureMember = (channel: MockChannel) => {
-    if (
-      channel.members.some(
-        (member) =>
-          normalizePubkey(member.pubkey) === normalizePubkey(currentPubkey),
-      )
-    ) {
-      return;
-    }
+  const isMember = (channel: MockChannel) =>
+    channel.members.some(
+      (member) =>
+        normalizePubkey(member.pubkey) === normalizePubkey(currentPubkey),
+    );
+  const retiredChannelIds: string[] = [];
 
-    channel.members.push(createCurrentMember(config, "member"));
-    syncMockChannel(channel);
-    touchMockChannel(channel);
-    changedChannelIds.push(channel.id);
-  };
-
+  // Public starters are only left; the mock keeps the channel and drops this
+  // identity from its roster, mirroring `retire_welcome_channels`.
   for (const channelName of [
     STARTER_GENERAL_CHANNEL_NAME,
     STARTER_WELCOME_CHANNEL_NAME,
@@ -7288,19 +7287,37 @@ async function handleEnsureStarterChannels(
         candidate.name === channelName &&
         candidate.channel_type === "stream" &&
         candidate.visibility === "open" &&
-        candidate.archived_at === null,
+        candidate.archived_at === null &&
+        isMember(candidate),
     );
     if (!channel) {
-      throw new Error(`Starter channel ${channelName} not found.`);
+      continue;
     }
-    ensureMember(channel);
+    channel.members = channel.members.filter(
+      (member) =>
+        normalizePubkey(member.pubkey) !== normalizePubkey(currentPubkey),
+    );
+    syncMockChannel(channel);
+    touchMockChannel(channel);
+    retiredChannelIds.push(channel.id);
   }
 
-  return {
-    channels: listMockChannels(config),
-    changed_channel_ids: changedChannelIds,
-    error: null,
-  };
+  // The private per-user Welcome is deleted for its solo owner.
+  const index = mockChannels.findIndex(
+    (candidate) =>
+      candidate.name === "Welcome" &&
+      candidate.channel_type === "stream" &&
+      candidate.visibility === "private" &&
+      candidate.archived_at === null &&
+      isMember(candidate),
+  );
+  if (index !== -1) {
+    const [channel] = mockChannels.splice(index, 1);
+    mockMessages.delete(channel.id);
+    retiredChannelIds.push(channel.id);
+  }
+
+  return { retired_channel_ids: retiredChannelIds, error: null };
 }
 
 async function handleCreateChannel(
@@ -14465,8 +14482,8 @@ export function maybeInstallE2eTauriMocks() {
           payload as Parameters<typeof handleCreateChannel>[0],
           activeConfig,
         );
-      case "ensure_starter_channels":
-        return handleEnsureStarterChannels(activeConfig);
+      case "retire_welcome_channels":
+        return handleRetireWelcomeChannels(activeConfig);
       case "open_dm":
         return handleOpenDm(
           payload as Parameters<typeof handleOpenDm>[0],

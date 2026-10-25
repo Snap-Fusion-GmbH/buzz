@@ -11,7 +11,7 @@ use super::*;
 
 /// Real built-in record (avatar cleared — live built-ins ship ~170 KiB inline PNG).
 fn builtin(id: &str) -> AgentDefinition {
-    let mut record = crate::managed_agents::built_in_persona_definition(id, NOW)
+    let mut record = crate::managed_agents::retired_builtin_persona_definition(id, NOW)
         .unwrap_or_else(|| panic!("'{id}' is not a built-in persona"));
     record.avatar_url = None;
     record

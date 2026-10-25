@@ -168,7 +168,7 @@ See [VISION_PROJECTS.md](VISION_PROJECTS.md) for the full forge vision: the proj
 
 ## Agent Personas & Teams
 
-Agents aren't monolithic. A persona bundles a model and a system prompt. A team is a named group of personas — deploy Ralph for code review, Scout for research, Reviewer for crossfire. Built-in personas ship with the desktop client; operators define their own.
+Agents aren't monolithic. A persona bundles a model and a system prompt. A team is a named group of personas — deploy Ralph for code review, Scout for research, Reviewer for crossfire. The desktop client ships without preconfigured agents or teams; each community defines its own.
 
 ---
 
@@ -227,7 +227,7 @@ Greenfield. Agent swarms build in parallel, integrating at the event store bound
 | ✅ | Workflow engine — YAML-as-code, execution traces, message/reaction/schedule/webhook triggers |
 | ✅ | Identity — NIP-05, public profiles, NIP-98 auth, agent protection |
 | ✅ | Agent CLI — `buzz-cli`, mirrors and extends the MCP surface |
-| ✅ | Agent personas and teams — desktop-managed, built-in defaults, operator-defined |
+| ✅ | Agent personas and teams — desktop-managed, user-defined |
 | 🚧 | Workflow approval gates — infrastructure exists (DB, API, UI); executor doesn't persist/resume (WF-08) |
 | ✅ | Huddles — WebSocket Opus voice relay + lifecycle events (recording/tracks planned) |
 | ✅ | Buzz Mesh — relay-gated shared AI compute (mesh-llm over iroh); members pool GPUs, agents consume via a local OpenAI-compatible endpoint |

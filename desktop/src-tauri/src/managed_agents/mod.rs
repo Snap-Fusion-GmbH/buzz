@@ -47,7 +47,6 @@ mod runtime_types;
 mod session_policy;
 pub(crate) mod snapshot_avatar;
 pub(crate) mod spawn_snapshot;
-pub(crate) mod starter_defaults;
 pub(crate) mod storage;
 pub(crate) mod team_catalog;
 pub(crate) mod team_events;

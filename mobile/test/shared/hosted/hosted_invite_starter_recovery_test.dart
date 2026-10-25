@@ -25,9 +25,8 @@ class _Recovery implements InviteJoinRecovery {
   _Recovery(this.run);
   final Future<void> Function() run;
   @override
-  Future<String?> ensureStarterChannels() async {
+  Future<void> retireWelcomeChannels() async {
     await run();
-    return 'welcome-everyone';
   }
 }
 

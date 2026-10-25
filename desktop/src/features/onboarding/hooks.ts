@@ -1,165 +1,48 @@
 import * as React from "react";
 import { useQueryClient, type QueryStatus } from "@tanstack/react-query";
-import { toast } from "sonner";
 
-import {
-  managedAgentsQueryKey,
-  relayAgentsQueryKey,
-} from "@/features/agents/hooks";
 import { channelsQueryKey } from "@/features/channels/hooks";
 import {
-  ensureStarterChannels,
-  ensureWelcomeChannel,
-  hasEnsuredWelcomeChannel,
-  markWelcomeChannelEnsured,
-  notifyWelcomeChannelReady,
-  rememberPendingWelcomeChannel,
-} from "@/features/onboarding/welcome";
+  hasRetiredWelcomeChannels,
+  markWelcomeChannelsRetired,
+} from "@/features/onboarding/welcomeChannelsRetirement";
 import { forceFreshOnboarding } from "@/features/onboarding/devFreshOnboarding";
-import { ensureWelcomeCanvas } from "@/features/onboarding/welcomeCanvas";
-import { ensureWelcomeTeam } from "@/features/onboarding/welcomeGuide";
 import { useProfileQuery } from "@/features/profile/hooks";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type { Channel } from "@/shared/api/types";
-import {
-  createChannel,
-  deleteChannel,
-  ensureStarterChannels as ensureStarterChannelsCommand,
-  getChannelMembers,
-  getChannels,
-  updateChannel,
-} from "@/shared/api/tauri";
+import { getChannels } from "@/shared/api/tauri";
+import { retireWelcomeChannels } from "@/shared/api/tauriChannels";
 
 // Adapter: resolves the full channel list without the not-modified short-circuit.
 // Onboarding paths run once and always need fresh data.
-const getChannelsList = (): Promise<Channel[]> =>
+export const getChannelsList = (): Promise<Channel[]> =>
   getChannels(null).then((payload) => payload.channels ?? []);
 
-const STARTER_CHANNEL_SETUP_TOAST_ID = "starter-channel-setup-error";
+export type WelcomeChannelsRetirementResult =
+  | { ok: true }
+  | { ok: false; reason: string };
 
-export type ChannelInitResult =
-  | { ok: true; focusChannelId?: string }
-  | { ok: false; reason: string; focusChannelId?: string };
-
-const welcomeSeedPromises = new Map<string, Promise<void>>();
-
-function seedWelcomeExperience(
-  queryClient: ReturnType<typeof useQueryClient>,
-  channelId: string,
-  pubkey: string | null,
-  communityScope: string | null,
-) {
-  const key = `${communityScope ?? ""}:${channelId}`;
-  const current = welcomeSeedPromises.get(key);
-  if (current) return current;
-
-  const promise = (async () => {
-    try {
-      await ensureWelcomeTeam(channelId, communityScope);
-      await ensureWelcomeCanvas(channelId);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: managedAgentsQueryKey }),
-        queryClient.invalidateQueries({ queryKey: relayAgentsQueryKey }),
-      ]);
-      markWelcomeChannelEnsured(pubkey, communityScope);
-    } catch (error) {
-      console.warn("Failed to seed the private Welcome experience.", error);
-    }
-  })().finally(() => welcomeSeedPromises.delete(key));
-  welcomeSeedPromises.set(key, promise);
-  return promise;
-}
-
-export async function initializeStarterChannels(
-  queryClient: ReturnType<typeof useQueryClient>,
-  {
-    focus,
-    pubkey,
-    communityScope,
-  }: {
-    focus: boolean;
-    pubkey: string | null;
-    communityScope: string | null;
-  },
-): Promise<ChannelInitResult> {
+/**
+ * Retire the channels earlier releases seeded on a fresh install (see
+ * `retire_welcome_channels`). Idempotent, so a retry after a failure is safe;
+ * a failure is surfaced rather than treated as success and retried on the next
+ * start via the stored marker.
+ */
+export async function retireSeededWelcomeChannels(): Promise<WelcomeChannelsRetirementResult> {
   try {
-    let starterChannels: Awaited<
-      ReturnType<typeof ensureStarterChannels>
-    > | null = null;
-    try {
-      starterChannels = await ensureStarterChannels({
-        ensureStarterChannels: ensureStarterChannelsCommand,
-        getChannels: getChannelsList,
-      });
-    } catch (error) {
-      // Public starter channels are optional. Owners may have deliberately
-      // deleted their deterministic starter channels; that must not strand a
-      // new member after the required private Welcome channel succeeds.
-      console.warn("Failed to initialize public starter channels.", error);
+    const result = await retireWelcomeChannels();
+    if (result.error !== null) {
+      return { ok: false, reason: result.error };
     }
-
-    const welcomeChannel = await ensureWelcomeChannel(
-      {
-        createChannel,
-        deleteChannel,
-        getChannelMembers,
-        getChannels: getChannelsList,
-        updateChannel,
-      },
-      {
-        replaceExisting: forceFreshOnboarding,
-      },
-    );
-
-    const starterChannelList = starterChannels?.channels ?? [];
-    queryClient.setQueryData<Channel[]>(channelsQueryKey, (channels = []) => {
-      const ensuredIds = new Set(
-        starterChannelList.map((channel) => channel.id),
-      );
-      ensuredIds.add(welcomeChannel.id);
-      return [
-        ...starterChannelList,
-        ...(starterChannelList.some(
-          (channel) => channel.id === welcomeChannel.id,
-        )
-          ? []
-          : [welcomeChannel]),
-        ...channels.filter((channel) => !ensuredIds.has(channel.id)),
-      ];
-    });
-    void seedWelcomeExperience(
-      queryClient,
-      welcomeChannel.id,
-      pubkey,
-      communityScope,
-    );
-    await queryClient.invalidateQueries({ queryKey: channelsQueryKey });
-    if (focus) {
-      // Refreshing can briefly replace the optimistic cache with an older relay
-      // snapshot. Reinsert the just-ensured channels before announcing focus so
-      // the route can consume the pending private Welcome channel immediately.
-      queryClient.setQueryData<Channel[]>(channelsQueryKey, (channels = []) => {
-        const byId = new Map(
-          [...channels, ...starterChannelList, welcomeChannel].map(
-            (channel) => [channel.id, channel],
-          ),
-        );
-        return [...byId.values()];
-      });
-      rememberPendingWelcomeChannel(welcomeChannel.id);
-      notifyWelcomeChannelReady(welcomeChannel.id);
-    }
-    const focusChannelId = focus ? welcomeChannel.id : undefined;
-    return { ok: true, focusChannelId };
+    return { ok: true };
   } catch (error) {
-    console.warn("Failed to initialize starter channels.", error);
     return {
       ok: false,
       reason:
         error instanceof Error
           ? error.message
-          : "Failed to set up starter channels",
+          : "Failed to retire welcome channels",
     };
   }
 }
@@ -469,12 +352,11 @@ export function useAppOnboardingState(isSharedIdentity: boolean) {
   const identityQuery = useIdentityQuery();
   const identity = identityQuery.data;
   const currentPubkey = identity?.pubkey ?? null;
-  const starterChannelsCommunityScope = activeCommunity?.relayUrl ?? null;
-  const starterChannelsInitPromisesRef = React.useRef(
-    new Map<string, Promise<ChannelInitResult>>(),
+  const welcomeRetirementCommunityScope = activeCommunity?.relayUrl ?? null;
+  const welcomeRetirementPromisesRef = React.useRef(
+    new Map<string, Promise<WelcomeChannelsRetirementResult>>(),
   );
-  const [isCompletingStarterSetup, setIsCompletingStarterSetup] =
-    React.useState(false);
+  const [isCompletingSetup, setIsCompletingSetup] = React.useState(false);
   const identityLost = identity?.lost === true;
   // Keyring unreachable at boot — the real key is still in the OS keyring but
   // the session cannot access it. No in-app recovery is possible; the user
@@ -514,134 +396,68 @@ export function useAppOnboardingState(isSharedIdentity: boolean) {
     profileStatus: profileQuery.status,
   });
   const gateComplete = onboardingGate.complete;
-  const starterChannelsFocusIntentRef = React.useRef(
-    new Map<string, boolean>(),
-  );
-  const requestStarterChannels = React.useCallback(
-    (focus: boolean): Promise<ChannelInitResult> => {
-      if (!currentPubkey || !starterChannelsCommunityScope) {
+  const requestWelcomeRetirement =
+    React.useCallback((): Promise<WelcomeChannelsRetirementResult> => {
+      if (!currentPubkey || !welcomeRetirementCommunityScope) {
         return Promise.resolve({ ok: true });
       }
 
-      const starterChannelsInitKey = `${starterChannelsCommunityScope}:${currentPubkey}`;
-      const currentPromise = starterChannelsInitPromisesRef.current.get(
-        starterChannelsInitKey,
-      );
+      const retirementKey = `${welcomeRetirementCommunityScope}:${currentPubkey}`;
+      const currentPromise =
+        welcomeRetirementPromisesRef.current.get(retirementKey);
       if (currentPromise) {
-        // A focus=true request must not be swallowed behind an in-flight
-        // focus=false promise. Upgrade the intent: when the background
-        // promise resolves, chain a focus-only follow-up.
-        if (
-          focus &&
-          !starterChannelsFocusIntentRef.current.get(starterChannelsInitKey)
-        ) {
-          starterChannelsFocusIntentRef.current.set(
-            starterChannelsInitKey,
-            true,
-          );
-          return currentPromise.then((result) => {
-            if (!result.ok) return result;
-            return initializeStarterChannels(queryClient, {
-              focus: true,
-              pubkey: currentPubkey,
-              communityScope: starterChannelsCommunityScope,
-            });
-          });
-        }
         return currentPromise;
       }
 
-      if (focus) {
-        starterChannelsFocusIntentRef.current.set(starterChannelsInitKey, true);
-      }
-      const promise = initializeStarterChannels(queryClient, {
-        focus,
-        pubkey: currentPubkey,
-        communityScope: starterChannelsCommunityScope,
-      }).finally(() => {
-        starterChannelsInitPromisesRef.current.delete(starterChannelsInitKey);
-        starterChannelsFocusIntentRef.current.delete(starterChannelsInitKey);
-      });
-      starterChannelsInitPromisesRef.current.set(
-        starterChannelsInitKey,
-        promise,
-      );
+      const promise = retireSeededWelcomeChannels()
+        .then(async (result) => {
+          if (!result.ok) {
+            return result;
+          }
+          markWelcomeChannelsRetired(
+            currentPubkey,
+            welcomeRetirementCommunityScope,
+          );
+          await refreshChannelsCache(queryClient);
+          return result;
+        })
+        .finally(() => {
+          welcomeRetirementPromisesRef.current.delete(retirementKey);
+        });
+      welcomeRetirementPromisesRef.current.set(retirementKey, promise);
       return promise;
-    },
-    [currentPubkey, queryClient, starterChannelsCommunityScope],
-  );
+    }, [currentPubkey, queryClient, welcomeRetirementCommunityScope]);
 
   React.useEffect(() => {
     if (
       onboardingGate.stage !== "ready" ||
       !currentPubkey ||
-      !starterChannelsCommunityScope ||
-      !readOnboardingCompletion(currentPubkey) ||
-      hasEnsuredWelcomeChannel(currentPubkey, starterChannelsCommunityScope)
+      !welcomeRetirementCommunityScope ||
+      hasRetiredWelcomeChannels(currentPubkey, welcomeRetirementCommunityScope)
     ) {
       return;
     }
 
-    void requestStarterChannels(false);
+    void requestWelcomeRetirement();
   }, [
     currentPubkey,
     onboardingGate.stage,
-    requestStarterChannels,
-    starterChannelsCommunityScope,
+    requestWelcomeRetirement,
+    welcomeRetirementCommunityScope,
   ]);
 
-  const showStarterRetryToast = React.useCallback(
-    (reason: string) => {
-      toast.error("Couldn't set up starter channels", {
-        id: STARTER_CHANNEL_SETUP_TOAST_ID,
-        action: {
-          label: "Retry",
-          onClick: (event) => {
-            event.preventDefault();
-            void requestStarterChannels(true).then((result) => {
-              if (!result.ok) {
-                window.setTimeout(
-                  // Sonner dismisses an action toast as its click resolves, so
-                  // recreate a failed retry after that dismissal completes.
-                  () => showStarterRetryToast(result.reason),
-                  0,
-                );
-                return;
-              }
-              toast.dismiss(STARTER_CHANNEL_SETUP_TOAST_ID);
-            });
-          },
-        },
-        description: reason,
-      });
-    },
-    [requestStarterChannels],
-  );
-
-  const completeAndShowWelcome = React.useCallback(() => {
-    setIsCompletingStarterSetup(true);
-    void requestStarterChannels(true).then(async (starterResult) => {
-      await refreshChannelsCache(queryClient);
+  const completeAndShowHome = React.useCallback(() => {
+    setIsCompletingSetup(true);
+    void requestWelcomeRetirement().then(() => {
       gateComplete();
-      setIsCompletingStarterSetup(false);
-      if (starterResult.focusChannelId) {
-        window.location.hash = `/channels/${encodeURIComponent(
-          starterResult.focusChannelId,
-        )}`;
-      }
-      if (!starterResult.ok) {
-        showStarterRetryToast(starterResult.reason);
-      }
+      setIsCompletingSetup(false);
+      window.location.hash = "/";
     });
-  }, [
-    gateComplete,
-    queryClient,
-    requestStarterChannels,
-    showStarterRetryToast,
-  ]);
+  }, [gateComplete, requestWelcomeRetirement]);
+
   const flow = {
     actions: {
-      complete: completeAndShowWelcome,
+      complete: completeAndShowHome,
       skipForNow: onboardingGate.skipForNow,
     },
     initialProfile: {
@@ -672,7 +488,7 @@ export function useAppOnboardingState(isSharedIdentity: boolean) {
           ? ("keyring-locked" as const)
           : relaunchRequired
             ? ("relaunch-required" as const)
-            : isCompletingStarterSetup
+            : isCompletingSetup
               ? ("blocking" as const)
               : onboardingGate.stage,
   };

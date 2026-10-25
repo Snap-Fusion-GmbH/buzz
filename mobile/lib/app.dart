@@ -26,6 +26,7 @@ import 'features/channels/me/me_page.dart';
 import 'features/channels/me/me_unread_provider.dart';
 import 'features/invites/invite_create_page.dart';
 import 'features/invites/invite_join_provider.dart';
+import 'features/invites/welcome_channels_retirement.dart';
 import 'features/pairing/pairing_page.dart';
 import 'features/pairing/pairing_provider.dart';
 import 'features/channels/agent_activity/observer_subscription.dart';
@@ -51,13 +52,13 @@ import 'shared/widgets/buzz_loading_indicator.dart';
 
 const _starterChannelNamespace = '3ce33bea-8f09-5f1b-9c85-8a7d2659e6b0';
 
-const _starterChannels = [
-  (slug: 'general', description: 'General conversation and community updates.'),
-  (
-    slug: 'welcome-everyone',
-    description: 'Say hi, ask a question, or share what brought you here.',
-  ),
-];
+/// Names seeded as public starter channels by earlier releases. Matching on
+/// the deterministic id as well keeps retirement from touching a channel the
+/// community created on purpose under the same name.
+const _retiredPublicStarterSlugs = ['general', 'welcome-everyone'];
+
+/// The private per-user channel seeded by earlier releases.
+const _retiredPrivateWelcomeName = 'Welcome';
 
 final _inviteRelayConnectedProvider = FutureProvider.family<void, String>((
   ref,
@@ -86,94 +87,75 @@ final _inviteRelayConnectedProvider = FutureProvider.family<void, String>((
 /// App-level bridge from invite joining to the channels feature.
 class MobileInviteJoinRecovery implements InviteJoinRecovery {
   final Future<List<Channel>> Function() _loadChannels;
-  final Future<Channel> Function({
-    required String channelId,
-    required String name,
-    required String channelType,
-    required String visibility,
-    String? description,
-    int? ttlSeconds,
-  })
-  _createChannel;
-  final Future<void> Function(String channelId) _joinChannel;
+  final Future<List<ChannelMember>> Function(String channelId) _loadMembers;
+  final Future<void> Function(String channelId) _leaveChannel;
+  final Future<void> Function(String channelId) _deleteChannel;
   final String _relayHttpOrigin;
+  final String? _currentPubkey;
   final bool Function() _isScopeCurrent;
 
-  /// Creates recovery from channel-loading, creation, and join operations.
+  /// Creates recovery from channel-loading and membership operations.
   MobileInviteJoinRecovery({
     required Future<List<Channel>> Function() loadChannels,
-    required Future<Channel> Function({
-      required String channelId,
-      required String name,
-      required String channelType,
-      required String visibility,
-      String? description,
-      int? ttlSeconds,
-    })
-    createChannel,
-    required Future<void> Function(String channelId) joinChannel,
+    required Future<List<ChannelMember>> Function(String channelId) loadMembers,
+    required Future<void> Function(String channelId) leaveChannel,
+    required Future<void> Function(String channelId) deleteChannel,
     required String relayHttpOrigin,
+    String? currentPubkey,
     bool Function()? isScopeCurrent,
   }) : _loadChannels = loadChannels,
-       _createChannel = createChannel,
-       _joinChannel = joinChannel,
+       _loadMembers = loadMembers,
+       _leaveChannel = leaveChannel,
+       _deleteChannel = deleteChannel,
        _relayHttpOrigin = relayHttpOrigin,
+       _currentPubkey = currentPubkey,
        _isScopeCurrent = isScopeCurrent ?? _alwaysCurrent;
 
-  /// Ensures memberships in the same public starter channels as desktop.
+  /// Retires the channels earlier releases seeded into every installation.
   ///
-  /// All starter work is fenced to the community and identity that started it.
-  /// A partial setup remains recoverable, so a failed operation deliberately
-  /// propagates to the invite flow instead of being reported as success.
+  /// Public starters are community-owned, so they are only left — rejoinable
+  /// at any time and never destroyed for other members. The private per-user
+  /// Welcome channel is deleted when this identity is its solo owner, and left
+  /// otherwise.
+  ///
+  /// Idempotent: a retired channel is no longer a membership. All work is
+  /// fenced to the community and identity that started it, and a partial
+  /// failure propagates so the retry stays available instead of being
+  /// reported as success.
   @override
-  Future<String?> ensureStarterChannels() async {
+  Future<void> retireWelcomeChannels() async {
     _ensureScopeCurrent();
-    var channels = await _loadChannels();
+    final channels = await _loadChannels();
     _ensureScopeCurrent();
-    String? welcomeEveryoneId;
 
-    for (final starter in _starterChannels) {
+    for (final slug in _retiredPublicStarterSlugs) {
+      final channelId = desktopStarterChannelId(
+        relayHttpOrigin: _relayHttpOrigin,
+        slug: slug,
+      );
+      final channel = channels
+          .where((candidate) => candidate.id == channelId && candidate.isMember)
+          .firstOrNull;
+      if (channel == null) continue;
+      await _leaveChannel(channel.id);
       _ensureScopeCurrent();
-      var channel = _findStarterChannel(channels, starter.slug);
-      if (channel == null) {
-        final channelId = desktopStarterChannelId(
-          relayHttpOrigin: _relayHttpOrigin,
-          slug: starter.slug,
-        );
-        try {
-          channel = await _createChannel(
-            channelId: channelId,
-            name: starter.slug,
-            channelType: 'stream',
-            visibility: 'open',
-            description: starter.description,
-          );
-          _ensureScopeCurrent();
-        } catch (error) {
-          if (!_isDuplicateChannelError(error)) rethrow;
-          _ensureScopeCurrent();
-          channels = await _loadChannels();
-          _ensureScopeCurrent();
-          channel =
-              _findStarterChannel(channels, starter.slug) ??
-              channels
-                  .where((candidate) => candidate.id == channelId)
-                  .firstOrNull;
-          if (channel == null) rethrow;
-        }
-      }
-
-      _ensureScopeCurrent();
-      if (!channel.isMember) {
-        await _joinChannel(channel.id);
-        _ensureScopeCurrent();
-      }
-      if (starter.slug == 'welcome-everyone') {
-        welcomeEveryoneId = channel.id;
-      }
     }
 
-    return welcomeEveryoneId;
+    for (final channel in channels) {
+      if (!_isRetiredPrivateWelcome(channel)) continue;
+      final members = await _loadMembers(channel.id);
+      _ensureScopeCurrent();
+      if (_mayDeletePrivateWelcome(
+        channel,
+        members,
+        currentPubkey: _currentPubkey,
+      )) {
+        await _deleteChannel(channel.id);
+      } else {
+        await _leaveChannel(channel.id);
+      }
+      _ensureScopeCurrent();
+    }
   }
 
   static bool _alwaysCurrent() => true;
@@ -185,21 +167,37 @@ class MobileInviteJoinRecovery implements InviteJoinRecovery {
   }
 }
 
-Channel? _findStarterChannel(List<Channel> channels, String name) {
-  final normalizedName = name.trim().toLowerCase();
-  return channels
-      .where(
-        (channel) =>
-            channel.name.trim().toLowerCase() == normalizedName &&
-            channel.isStream &&
-            channel.visibility == 'open' &&
-            !channel.isArchived,
-      )
-      .firstOrNull;
-}
+bool _isRetiredPrivateWelcome(Channel channel) =>
+    channel.name.trim().toLowerCase() ==
+        _retiredPrivateWelcomeName.toLowerCase() &&
+    channel.isStream &&
+    channel.isPrivate &&
+    !channel.isArchived &&
+    channel.isMember;
 
-bool _isDuplicateChannelError(Object error) =>
-    error.toString().contains('duplicate: channel already exists');
+/// Deleting destroys the channel for everyone, so it is reserved for the
+/// identity that owns a Welcome channel nobody else has joined. Everything
+/// else is somebody else's channel: leaving is the most a client may do.
+bool _mayDeletePrivateWelcome(
+  Channel channel,
+  List<ChannelMember> members, {
+  String? currentPubkey,
+}) {
+  if (members.isEmpty) {
+    // No roster means no proof of ownership; fall back to the creator bound
+    // into the channel metadata.
+    return currentPubkey != null &&
+        channel.createdBy.toLowerCase() == currentPubkey.toLowerCase();
+  }
+  final actorIsOwner = members.any(
+    (member) =>
+        member.isOwner &&
+        (currentPubkey == null ||
+            member.pubkey.toLowerCase() == currentPubkey.toLowerCase()),
+  );
+  final humanMembers = members.where((member) => !member.isBot).length;
+  return actorIsOwner && humanMembers <= 1;
+}
 
 /// Returns desktop's deterministic per-relay UUID for a public starter.
 @visibleForTesting
@@ -253,24 +251,16 @@ InviteJoinRecovery buildMobileInviteJoinRecovery(
       ensureScopeCurrent();
       return channels;
     },
-    createChannel:
-        ({
-          required channelId,
-          required name,
-          required channelType,
-          required visibility,
-          description,
-          ttlSeconds,
-        }) => channelActions.createChannel(
-          channelId: channelId,
-          name: name,
-          channelType: channelType,
-          visibility: visibility,
-          description: description,
-          ttlSeconds: ttlSeconds,
-        ),
-    joinChannel: channelActions.joinChannel,
+    loadMembers: (channelId) async {
+      ensureScopeCurrent();
+      final members = await ref.read(channelMembersProvider(channelId).future);
+      ensureScopeCurrent();
+      return members;
+    },
+    leaveChannel: channelActions.leaveChannel,
+    deleteChannel: channelActions.deleteChannel,
     relayHttpOrigin: scope.relayHttpOrigin,
+    currentPubkey: ref.read(myPubkeyProvider),
     isScopeCurrent: isScopeCurrent,
   );
 }
@@ -331,6 +321,9 @@ class App extends HookConsumerWidget {
     if (ageSignalState != AgeSignalState.restricted &&
         authState.value?.status == AuthStatus.authenticated) {
       ref.watch(relaySessionProvider);
+      // One-time removal of the channels earlier releases seeded. Best-effort:
+      // a failure leaves the marker unset and the next start retries.
+      ref.watch(welcomeChannelsRetirementProvider);
       // Listen, not watch: these publish often, and an App rebuild rebuilds
       // every route, including an open chat.
       ref.listen(observerRelayProvider, (_, _) {});

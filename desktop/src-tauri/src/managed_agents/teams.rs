@@ -31,23 +31,24 @@ struct BuiltInTeam {
     persona_ids: &'static [&'static str],
 }
 
-const BUILT_IN_TEAMS: &[BuiltInTeam] = &[BuiltInTeam {
-    id: "builtin-team:welcome",
-    name: "Welcome Team",
-    description: Some("A friendly starter trio ready to help you plan, create, and ship."),
-    persona_ids: &["builtin:fizz", "builtin:honey", "builtin:bumble"],
-}];
-
 // Built-in teams that have been retired. A stored copy that still exactly
 // matches its seed is purged on load (the user never touched it); customized
 // copies are demoted to user-owned teams by the retirement loop in
 // merge_teams_impl.
-const RETIRED_BUILT_IN_TEAMS: &[BuiltInTeam] = &[BuiltInTeam {
-    id: "builtin-team:fizz",
-    name: "Fizz",
-    description: Some("Fizz works carefully and collaboratively."),
-    persona_ids: &["builtin:fizz"],
-}];
+const RETIRED_BUILT_IN_TEAMS: &[BuiltInTeam] = &[
+    BuiltInTeam {
+        id: "builtin-team:welcome",
+        name: "Welcome Team",
+        description: Some("A friendly starter trio ready to help you plan, create, and ship."),
+        persona_ids: &["builtin:fizz", "builtin:honey", "builtin:bumble"],
+    },
+    BuiltInTeam {
+        id: "builtin-team:fizz",
+        name: "Fizz",
+        description: Some("Fizz works carefully and collaboratively."),
+        persona_ids: &["builtin:fizz"],
+    },
+];
 
 fn built_in_team_records(built_ins: &[BuiltInTeam], now: &str) -> Vec<TeamRecord> {
     built_ins
@@ -81,12 +82,7 @@ fn built_in_team_order(built_ins: &[BuiltInTeam], id: &str) -> Option<usize> {
 /// (name, description, persona membership). Returns the merged list and whether
 /// the store changed.
 fn merge_teams(stored: Vec<TeamRecord>, now: &str) -> (Vec<TeamRecord>, bool) {
-    let built_ins = if super::starter_defaults::enabled() {
-        BUILT_IN_TEAMS
-    } else {
-        &[]
-    };
-    merge_teams_impl(built_ins, RETIRED_BUILT_IN_TEAMS, stored, now)
+    merge_teams_impl(&[], RETIRED_BUILT_IN_TEAMS, stored, now)
 }
 
 fn merge_teams_impl(
