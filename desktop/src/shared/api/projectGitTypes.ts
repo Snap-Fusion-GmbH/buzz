@@ -95,6 +95,13 @@ export type ProjectRepoCloneResult = {
   message: string;
 };
 
+export type ProjectRepoUploadResult = {
+  branch: string;
+  commit: string;
+  files: string[];
+  path: string;
+};
+
 export type ProjectRepoBranchResult = {
   branch: string;
   commit: string;

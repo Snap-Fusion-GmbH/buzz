@@ -1446,6 +1446,11 @@ declare global {
       can_pull: boolean;
       pull_block_reason: string | null;
     };
+    __BUZZ_E2E_PROJECT_FILE_UPLOADS__?: Array<{
+      projectDtag: string;
+      cloneUrl: string;
+      defaultBranch: string | null;
+    }>;
     __BUZZ_E2E_SET_RELAY_CONNECTION_STATE__?: (state: ConnectionState) => void;
     __BUZZ_E2E_GET_RELAY_CONNECTION_STATE__?: () => ConnectionState;
     /** Queue deterministic mock AUTH outcomes, consumed in order. */
@@ -13190,6 +13195,21 @@ export function maybeInstallE2eTauriMocks() {
         );
       case "list_project_local_repositories":
         return [];
+      case "pick_and_upload_project_files": {
+        const input = payload as {
+          projectDtag: string;
+          cloneUrl: string;
+          defaultBranch: string | null;
+        };
+        window.__BUZZ_E2E_PROJECT_FILE_UPLOADS__ ??= [];
+        window.__BUZZ_E2E_PROJECT_FILE_UPLOADS__.push(input);
+        return {
+          branch: input.defaultBranch ?? "main",
+          commit: "abcdef0123456789abcdef0123456789abcdef01",
+          files: ["artifacts.zip", "verification.json"],
+          path: `/tmp/buzz/REPOS/${input.projectDtag}`,
+        };
+      }
       case "open_project_repository_folder":
         return null;
       case "push_project_local_repository": {

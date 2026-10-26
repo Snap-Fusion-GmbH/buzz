@@ -92,6 +92,7 @@ export function ChannelScreen({
   autoSendDraftKey,
   currentIdentity,
   currentProfile,
+  addFilesLabel,
   headerEndActions, idleAuxiliaryPanel,
   idleAuxiliaryHeaderActions, idleAuxiliaryOverridesThread,
   idleAuxiliaryTitle,
@@ -852,7 +853,7 @@ export function ChannelScreen({
                   fetchOlder={fetchOlder}
                   header={channelHeader}
                   {...{ idleAuxiliaryHeaderActions, idleAuxiliaryOverridesThread, idleAuxiliaryPanel, idleAuxiliaryTitle, hasOlderMessages, historyExhausted }}
-                  {...{ onAddFiles }}
+                  {...{ addFilesLabel, onAddFiles }}
                   onAddAgent={handleOpenAddBot}
                   onBrowseChannels={openBrowseChannels}
                   onCreateChannel={openCreateChannel}

@@ -587,6 +587,7 @@ pub fn run() {
             push_project_local_repository,
             pull_project_local_repository,
             publish_project_owner_announcement,
+            pick_and_upload_project_files,
             sign_project_pull_request_status,
             sign_project_pull_request_review_request,
             sign_project_issue_assignment,

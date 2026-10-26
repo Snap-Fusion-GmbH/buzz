@@ -173,6 +173,7 @@ export type {
   ProjectRepoPushResult,
   ProjectRepoSnapshot,
   ProjectRepoSyncStatus,
+  ProjectRepoUploadResult,
 } from "./projectGitTypes";
 
 export type RelayEvent = {

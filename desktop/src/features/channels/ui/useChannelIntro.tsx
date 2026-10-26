@@ -1,5 +1,12 @@
 import * as React from "react";
-import { Bot, FolderPlus, Plus, Sparkles, UserPlus } from "lucide-react";
+import {
+  Bot,
+  FileUp,
+  FolderPlus,
+  Plus,
+  Sparkles,
+  UserPlus,
+} from "lucide-react";
 
 import {
   getChannelIntroDescription,
@@ -30,6 +37,7 @@ type ChannelIntroAction = {
  */
 export function useChannelIntro({
   activeChannel,
+  addFilesLabel = "Add files",
   onAddAgent,
   onAddFiles,
   onBrowseChannels,
@@ -38,6 +46,7 @@ export function useChannelIntro({
   onWelcomeAddAgent,
 }: {
   activeChannel: Channel | null;
+  addFilesLabel?: "Add files" | "Add repository";
   onAddAgent?: (options?: { beforeSend?: () => void }) => void;
   onAddFiles?: () => void;
   onBrowseChannels?: () => void;
@@ -96,10 +105,17 @@ export function useChannelIntro({
 
     if (!activeChannel.archivedAt && activeChannel.isMember) {
       if (onAddFiles) {
+        const hasRepository = addFilesLabel === "Add files";
         actions.push({
-          description: "Add a repo.",
-          icon: <FolderPlus aria-hidden className="h-5 w-5" />,
-          label: "Add files",
+          description: hasRepository
+            ? "Commit files to the repo."
+            : "Add a repo.",
+          icon: hasRepository ? (
+            <FileUp aria-hidden className="h-5 w-5" />
+          ) : (
+            <FolderPlus aria-hidden className="h-5 w-5" />
+          ),
+          label: addFilesLabel,
           onClick: onAddFiles,
           testId: "channel-intro-action-add-files",
         });
@@ -138,6 +154,7 @@ export function useChannelIntro({
     };
   }, [
     activeChannel,
+    addFilesLabel,
     onAddAgent,
     onAddFiles,
     onBrowseChannels,

@@ -45,7 +45,7 @@ fn git_needs_credentials(args: &[&str]) -> bool {
 }
 
 pub(crate) struct GitAuthConfig {
-    git_path: std::path::PathBuf,
+    pub(crate) git_path: std::path::PathBuf,
     credential_helper: Option<std::path::PathBuf>,
     nsec: String,
     allow_file_transport: bool,

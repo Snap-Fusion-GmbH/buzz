@@ -24,6 +24,7 @@ export type ChannelScreenProps = {
   idleAuxiliaryOverridesThread?: boolean;
   idleAuxiliaryTitle?: string;
   headerEndActions?: ReactNode;
+  addFilesLabel?: "Add files" | "Add repository";
   onAddFiles?: () => void;
   onCloseIdleAuxiliaryPanel?: () => void;
   onCloseForumPost: () => void;

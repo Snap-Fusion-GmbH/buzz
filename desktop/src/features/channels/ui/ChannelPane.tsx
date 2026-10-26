@@ -127,6 +127,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   onCloseIdleAuxiliaryPanel,
   onCloseProfilePanel,
   onAddAgent,
+  addFilesLabel,
   onAddFiles,
   onBrowseChannels,
   onCreateChannel,
@@ -364,6 +365,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   }, [onAddAgent]);
   const standardChannelIntro = useChannelIntro({
     activeChannel,
+    addFilesLabel,
     onAddAgent,
     onAddFiles,
     onBrowseChannels,

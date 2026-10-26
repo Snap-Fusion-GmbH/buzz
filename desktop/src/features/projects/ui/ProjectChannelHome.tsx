@@ -5,8 +5,11 @@ import * as React from "react";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { ChannelScreenLoadingFallback } from "@/features/channels/ui/ChannelScreenLoadingFallback";
+import { useCommunities } from "@/features/communities/useCommunities";
 import { useProfileQuery } from "@/features/profile/hooks";
-import type { Project } from "@/features/projects/hooks";
+import type { Project, Repository } from "@/features/projects/hooks";
+import { effectiveCloneUrls } from "@/features/projects/lib/projectCloneUrl";
+import { projectRepoHostForRepository } from "@/features/projects/lib/projectRepoHost";
 import {
   isProjectHomeWorkspaceSheetTab,
   projectHomeWorkspaceSheetExpandTab,
@@ -15,10 +18,12 @@ import {
 } from "@/features/projects/lib/projectHomeWorkspaceSheet";
 import { ProjectSelectionProvider } from "@/features/projects/lib/useProjectSelection";
 import { useHealProjectHomeRepositories } from "@/features/projects/useHealProjectHomeRepositories";
+import { useUploadProjectFilesMutation } from "@/features/projects/repoSyncHooks";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type { RelayEvent } from "@/shared/api/types";
 import type { EntityLinkTab } from "@/shared/lib/entityLink";
 import { useThreadPanelWidth } from "@/shared/hooks/useThreadPanelWidth";
+import { useRelayOrigin } from "@/shared/lib/useRelayOrigin";
 import { SIDEBAR_WIDTH_MIN } from "@/shared/layout/sidebarLayout";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
@@ -26,10 +31,12 @@ import { DrawerPanelIcon } from "@/shared/ui/DrawerPanelIcon";
 import { useOptionalSidebar } from "@/shared/ui/sidebar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { ViewLoadingFallback } from "@/shared/ui/ViewLoadingFallback";
+import { toast } from "sonner";
 import { ProjectContextRail } from "./ProjectContextRail";
 import { ProjectDetailChrome } from "./ProjectDetailChrome";
 import { ProjectHomeColumn } from "./ProjectHomeColumn";
 import { ProjectHomeContextPanel } from "./ProjectHomeContextPanel";
+import { ProjectFileRepositoryDialog } from "./ProjectFileRepositoryDialog";
 import {
   ProjectHomeWorkspaceSheet,
   type ProjectHomeWorkspaceCreateAction,
@@ -100,6 +107,8 @@ export function ProjectChannelHome({
   targetMessageId?: string | null;
 }) {
   const { goChannel, goProject, goProjects } = useAppNavigation();
+  const { activeCommunity } = useCommunities();
+  const relayOrigin = useRelayOrigin();
   const sidebar = useOptionalSidebar();
   const identityQuery = useIdentityQuery();
   const profileQuery = useProfileQuery();
@@ -110,6 +119,38 @@ export function ProjectChannelHome({
   };
   const [summaryOpen, setSummaryOpen] = React.useState(true);
   const [addRepositoryOpen, setAddRepositoryOpen] = React.useState(false);
+  const [fileRepositoryOpen, setFileRepositoryOpen] = React.useState(false);
+  const uploadFilesMutation = useUploadProjectFilesMutation(
+    activeCommunity?.reposDir,
+  );
+  const uploadFiles = uploadFilesMutation.mutate;
+  const uploadPending = uploadFilesMutation.isPending;
+  const repositoriesWithCloneUrls = React.useMemo(
+    () =>
+      project.repositories.map((repository) => ({
+        ...repository,
+        cloneUrls: effectiveCloneUrls(
+          repository.cloneUrls,
+          relayOrigin,
+          repository.owner,
+          repository.dtag,
+        ),
+      })),
+    [project.repositories, relayOrigin],
+  );
+  const uploadableRepositoryIds = React.useMemo(
+    () =>
+      new Set(
+        repositoriesWithCloneUrls
+          .filter(
+            (repository) =>
+              projectRepoHostForRepository(repository, relayOrigin).kind ===
+              "buzz",
+          )
+          .map((repository) => repository.id),
+      ),
+    [relayOrigin, repositoriesWithCloneUrls],
+  );
   const [workspaceSheetTab, setWorkspaceSheetTab] =
     React.useState<ProjectHomeWorkspaceSheetTab | null>(null);
   const [workspaceRepositoryId, setWorkspaceRepositoryId] = React.useState<
@@ -180,8 +221,67 @@ export function ProjectChannelHome({
     void goProject(project.id);
   }, [goProject, project.id]);
   const handleAddFiles = React.useCallback(() => {
-    setAddRepositoryOpen(true);
-  }, []);
+    if (repositoriesWithCloneUrls.length === 0) {
+      setAddRepositoryOpen(true);
+    } else if (repositoriesWithCloneUrls.length === 1) {
+      const repository = repositoriesWithCloneUrls[0];
+      if (!repository) return;
+      if (uploadableRepositoryIds.has(repository.id)) {
+        if (!uploadPending) uploadFiles(repository);
+      } else {
+        toast.error("Files can only be added to Buzz-hosted repositories");
+      }
+    } else {
+      setFileRepositoryOpen(true);
+    }
+  }, [
+    repositoriesWithCloneUrls,
+    uploadFiles,
+    uploadPending,
+    uploadableRepositoryIds,
+  ]);
+  const handleSelectFileRepository = React.useCallback(
+    (repository: Repository) => {
+      setFileRepositoryOpen(false);
+      const uploadRepository = repositoriesWithCloneUrls.find(
+        (candidate) => candidate.id === repository.id,
+      );
+      if (uploadRepository && !uploadPending) uploadFiles(uploadRepository);
+    },
+    [repositoriesWithCloneUrls, uploadFiles, uploadPending],
+  );
+  React.useEffect(() => {
+    if (uploadFilesMutation.isPending) {
+      toast.loading("Choose files to commit and push.", {
+        id: "project-file-upload",
+      });
+      return;
+    }
+    if (uploadFilesMutation.isSuccess) {
+      const result = uploadFilesMutation.data;
+      if (result) {
+        toast.success(
+          `Added ${result.files.length === 1 ? result.files[0] : `${result.files.length} files`} in commit ${result.commit.slice(0, 7)}.`,
+          { id: "project-file-upload" },
+        );
+      } else {
+        toast.dismiss("project-file-upload");
+      }
+    } else if (uploadFilesMutation.isError) {
+      toast.error("Couldn’t add files to the repository", {
+        description: uploadFilesMutation.error.message,
+        id: "project-file-upload",
+      });
+    } else {
+      toast.dismiss("project-file-upload");
+    }
+  }, [
+    uploadFilesMutation.data,
+    uploadFilesMutation.error,
+    uploadFilesMutation.isError,
+    uploadFilesMutation.isPending,
+    uploadFilesMutation.isSuccess,
+  ]);
   const handleFilesAdded = React.useCallback((repositoryId: string) => {
     setWorkspaceCreateAction(null);
     setWorkspaceDetail(null);
@@ -372,6 +472,11 @@ export function ProjectChannelHome({
                     : ""
                 }
                 onAddFiles={handleAddFiles}
+                addFilesLabel={
+                  project.repositories.length > 0
+                    ? "Add files"
+                    : "Add repository"
+                }
                 onCloseIdleAuxiliaryPanel={closeWorkspaceSheet}
                 onCloseForumPost={ignoreForumPost}
                 onSelectForumPost={ignoreForumPostSelect}
@@ -401,6 +506,14 @@ export function ProjectChannelHome({
           onCreateOpenChange={setAddRepositoryOpen}
           project={project}
           projects={projects}
+        />
+        <ProjectFileRepositoryDialog
+          isUploading={uploadFilesMutation.isPending}
+          onOpenChange={setFileRepositoryOpen}
+          onSelect={handleSelectFileRepository}
+          open={fileRepositoryOpen}
+          project={project}
+          uploadableRepositoryIds={uploadableRepositoryIds}
         />
         <ProjectContextRail
           animateWidth={!workspaceSheetVisibilityChanged}

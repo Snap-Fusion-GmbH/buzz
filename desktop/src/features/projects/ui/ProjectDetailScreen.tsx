@@ -703,8 +703,13 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
   if (!repository) {
     return (
       <ProjectDetailUnavailableState
+        identityPubkey={identityPubkey}
         kind="repositories-unavailable"
+        onRepositoryAdded={(nextRepositoryId) =>
+          void goProject(project.id, { repositoryId: nextRepositoryId })
+        }
         project={project}
+        projects={projectsQuery.data ?? [project]}
       />
     );
   }

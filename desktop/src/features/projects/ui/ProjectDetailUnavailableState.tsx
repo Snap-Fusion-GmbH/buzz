@@ -2,6 +2,7 @@ import { ArrowLeft, FolderGit2 } from "lucide-react";
 
 import type { Project } from "@/features/projects/hooks";
 import { Button } from "@/shared/ui/button";
+import { ProjectRepositoryManagement } from "./ProjectRepositoryManagement";
 import { UnavailableProjectRepositories } from "./UnavailableProjectRepositories";
 
 type ProjectDetailUnavailableStateProps =
@@ -16,7 +17,10 @@ type ProjectDetailUnavailableStateProps =
     }
   | {
       kind: "repositories-unavailable";
+      identityPubkey?: string;
+      onRepositoryAdded: (repositoryId: string) => void;
       project: Project;
+      projects: Project[];
     };
 
 export function ProjectDetailUnavailableState(
@@ -65,6 +69,14 @@ export function ProjectDetailUnavailableState(
         This project does not have any available repositories yet.
       </p>
       <UnavailableProjectRepositories project={props.project} />
+      <div data-testid="empty-project-add-repository">
+        <ProjectRepositoryManagement
+          identityPubkey={props.identityPubkey}
+          onChange={props.onRepositoryAdded}
+          project={props.project}
+          projects={props.projects}
+        />
+      </div>
     </div>
   );
 }

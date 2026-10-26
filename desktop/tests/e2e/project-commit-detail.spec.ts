@@ -304,10 +304,6 @@ test("creating a project opens its channel conversation", async ({ page }) => {
   await expect(
     page.getByTestId("channel-intro-action-add-files-title"),
   ).toHaveText("Add files");
-  await page.getByTestId("channel-intro-action-add-files").click();
-  await expect(page.getByTestId("add-project-repository-dialog")).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(page.getByTestId("add-project-repository-dialog")).toBeHidden();
   await expect(page.getByTestId("project-home-summary-column")).toBeVisible();
   await expect(
     page
@@ -492,6 +488,32 @@ test("creating a project opens its channel conversation", async ({ page }) => {
       ),
     )
     .toBe(2);
+});
+
+test("a project without a repository offers to add one", async ({ page }) => {
+  await enableProjectsFeature(page);
+  await page.addInitScript((owner) => {
+    window.__BUZZ_E2E_EXTRA_PROJECT_EVENTS__ = [
+      {
+        id: "ab".repeat(32),
+        kind: 30621,
+        pubkey: owner,
+        created_at: Math.floor(Date.now() / 1000),
+        content: "",
+        tags: [
+          ["d", "empty-project"],
+          ["name", "empty-project"],
+          ["buzz-channel", "cf63feec-21bb-5bf0-a2f8-0e4c3de8ec73"],
+        ],
+      },
+    ];
+  }, "deadbeef".repeat(8));
+  await installMockBridge(page);
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await addProjectToSidebar(page, "empty-project");
+  await page.getByTestId("add-project-repository").click();
+  await page.getByTestId("create-project-repository").click();
+  await expect(page.getByTestId("add-project-repository-dialog")).toBeVisible();
 });
 
 test("unsupported relays cannot create a channel-first project", async ({
@@ -996,6 +1018,31 @@ test("commit detail opens from the commits feed with a diff", async ({
   await projectEntry.click();
   await page.getByTestId("project-home-context-repo-buzz").click();
   await page.getByTestId("project-workspace-back").click();
+  await page.getByTestId("channel-intro-action-add-files").click();
+  await expect(
+    page.getByTestId("project-file-repository-dialog"),
+  ).toBeVisible();
+  await expect(
+    page.getByTestId("project-file-repository-relay-tools"),
+  ).toBeDisabled();
+  await page.getByTestId("project-file-repository-buzz").click();
+  await expect(
+    page.getByText("Added 2 files in commit abcdef0."),
+  ).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => window.__BUZZ_E2E_PROJECT_FILE_UPLOADS__?.length ?? 0,
+      ),
+    )
+    .toBe(1);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => window.__BUZZ_E2E_PROJECT_FILE_UPLOADS__?.[0]?.projectDtag,
+      ),
+    )
+    .toBe("buzz");
   await page.getByTestId("project-home-context-tasks").click();
   await expect(page.getByTestId("project-home-workspace-sheet")).toBeVisible();
   const focusDrawer = page.getByTestId("focus-thread-drawer");

@@ -9,6 +9,7 @@ import type {
   ProjectRepoPushResult,
   ProjectRepoSnapshot,
   ProjectRepoSyncStatus,
+  ProjectRepoUploadResult,
   RelayEvent,
 } from "@/shared/api/types";
 import { invokeTauri, TauriInvokeError } from "@/shared/api/tauri";
@@ -479,6 +480,23 @@ export async function cloneProjectRepository(input: {
     cloneUrl: input.cloneUrl,
     defaultBranch: input.defaultBranch ?? null,
   });
+}
+
+export async function pickAndUploadProjectFiles(input: {
+  reposDir?: string | null;
+  projectDtag: string;
+  cloneUrl: string;
+  defaultBranch?: string | null;
+}): Promise<ProjectRepoUploadResult | null> {
+  return invokeTauri<ProjectRepoUploadResult | null>(
+    "pick_and_upload_project_files",
+    {
+      reposDir: input.reposDir ?? null,
+      projectDtag: input.projectDtag,
+      cloneUrl: input.cloneUrl,
+      defaultBranch: input.defaultBranch ?? null,
+    },
+  );
 }
 
 export async function createProjectRemoteBranch(input: {

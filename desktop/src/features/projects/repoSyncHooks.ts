@@ -4,6 +4,7 @@ import {
   cloneProjectRepository,
   getProjectRepoSyncStatus,
   pullProjectLocalRepository,
+  pickAndUploadProjectFiles,
   pushProjectLocalRepository,
 } from "@/shared/api/projectGit";
 import type {
@@ -13,6 +14,30 @@ import type {
 import { useProjectRepoHost } from "@/features/projects/useProjectRepoHost";
 import { useFocusedRefetchInterval } from "@/shared/lib/useDocumentVisible";
 import { publishProjectPullRequestUpdate } from "./pullRequestMutations";
+
+export function useUploadProjectFilesMutation(reposDir?: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (project: Project) => {
+      if (!project.cloneUrls[0]) throw new Error("No repository selected.");
+      return pickAndUploadProjectFiles({
+        reposDir,
+        projectDtag: project.dtag,
+        cloneUrl: project.cloneUrls[0],
+        defaultBranch: project.defaultBranch,
+      });
+    },
+    onSuccess: async (result, project) => {
+      if (!result) return;
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["project", project.id] }),
+        queryClient.invalidateQueries({
+          queryKey: ["projects", "local-repositories"],
+        }),
+      ]);
+    },
+  });
+}
 
 /** Local-vs-remote git sync status for a project checkout (ahead/behind
  * counts, push/pull availability). Polls gently — each check runs a
