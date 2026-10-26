@@ -56,6 +56,14 @@ function mount() {
   return { ...hook, client };
 }
 
+function mockReactionIPC(handler) {
+  mockIPC((command, payload) => {
+    if (command === "get_relay_http_url") return "https://relay.example";
+    if (command === "get_media_proxy_port") return 54321;
+    return handler(command, payload);
+  });
+}
+
 async function toggle(hook, remove = false) {
   await act(() =>
     hook.result.current.mutateAsync({
@@ -66,9 +74,11 @@ async function toggle(hook, remove = false) {
   );
 }
 
-test("a duplicate add reads the existing reaction, survives window projection, and can be removed", async (context) => {
+test("a duplicate add reads the existing reaction, survives window projection, and can be removed", {
+  timeout: 10_000,
+}, async (context) => {
   const commands = [];
-  mockIPC((command, payload) => {
+  mockReactionIPC((command, payload) => {
     commands.push({ command, payload });
     if (command === "add_reaction") throw DUPLICATE;
     if (command === "remove_reaction") return;
@@ -100,8 +110,10 @@ test("a duplicate add reads the existing reaction, survives window projection, a
   );
 });
 
-test("duplicate recovery requires an authoritative matching reaction and propagates read failures", async (context) => {
-  mockIPC(() => {
+test("duplicate recovery requires an authoritative matching reaction and propagates read failures", {
+  timeout: 10_000,
+}, async (context) => {
+  mockReactionIPC(() => {
     throw DUPLICATE;
   });
   let response = [];
@@ -124,8 +136,10 @@ test("duplicate recovery requires an authoritative matching reaction and propaga
   }
 });
 
-test("real permission errors are not treated as duplicate success", async (context) => {
-  mockIPC(() => {
+test("real permission errors are not treated as duplicate success", {
+  timeout: 10_000,
+}, async (context) => {
+  mockReactionIPC(() => {
     throw "relay rejected event: restricted: not a relay member";
   });
   const read = context.mock.method(relayClient, "fetchEvents", async () => []);
@@ -134,9 +148,11 @@ test("real permission errors are not treated as duplicate success", async (conte
   assert.equal(read.mock.callCount(), 0);
 });
 
-test("a late duplicate acknowledgement cannot read or update a different community", async (context) => {
+test("a late duplicate acknowledgement cannot read or update a different community", {
+  timeout: 10_000,
+}, async (context) => {
   let reject;
-  mockIPC(
+  mockReactionIPC(
     () =>
       new Promise((_, rejectPromise) => {
         reject = rejectPromise;
