@@ -2068,7 +2068,7 @@ test("channel date divider keeps the date sticky while the separator rule scroll
   });
 
   const [headerBox, stickyPillBox] = await Promise.all([
-    page.getByTestId("chat-header").boundingBox(),
+    page.getByRole("tablist", { name: "Channel views" }).boundingBox(),
     page
       .getByTestId("message-timeline-sticky-day-divider-content")
       .locator("p")
@@ -2076,7 +2076,7 @@ test("channel date divider keeps the date sticky while the separator rule scroll
       .boundingBox(),
   ]);
   if (!headerBox || !stickyPillBox) {
-    throw new Error("missing channel header or sticky day divider");
+    throw new Error("missing channel view tabs or sticky day divider");
   }
   expect(
     Math.abs(stickyPillBox.y - (headerBox.y + headerBox.height) - 8),

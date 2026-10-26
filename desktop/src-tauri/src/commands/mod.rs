@@ -40,6 +40,7 @@ mod media_snapshot_png;
 mod media_transcode;
 mod media_upload_progress;
 mod media_voice_note;
+mod meetings;
 #[cfg(feature = "mesh-llm")]
 pub(crate) mod mesh_llm;
 #[cfg(feature = "mesh-llm")]
@@ -107,6 +108,7 @@ pub use media::*;
 pub use media_download::*;
 pub use media_fetch_cancellation::*;
 pub use media_raw::*;
+pub use meetings::*;
 #[cfg(feature = "mesh-llm")]
 pub use mesh_llm::*;
 pub use messages::*;

@@ -433,7 +433,7 @@ pub fn sanitized_reason_for(err: &crate::handlers::ingest::IngestError) -> Sanit
     use crate::handlers::ingest::IngestError as E;
     match err {
         E::Rejected(_) => SanitizedReason::Invalid,
-        E::CanvasConflict(_) => SanitizedReason::Invalid,
+        E::CanvasConflict(_) | E::MeetingConflict(_) => SanitizedReason::Invalid,
         E::AuthFailed(_) => SanitizedReason::Restricted,
         E::Internal(_) => SanitizedReason::ServerError,
     }

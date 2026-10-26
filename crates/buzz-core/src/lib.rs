@@ -26,6 +26,8 @@ pub mod huddle_screen;
 pub mod invite;
 /// Buzz kind number registry — custom event type constants.
 pub mod kind;
+/// Channel meeting definitions, signed envelopes, and timezone-aware recurrence.
+pub mod meeting;
 /// Network utilities — SSRF-safe IP classification.
 pub mod network;
 /// NIP-10 thread-marker parsing — shared `root`/`reply` marker resolver.

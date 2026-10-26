@@ -692,7 +692,8 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
                 ),
                 IngestError::AuthFailed(m)
                 | IngestError::Rejected(m)
-                | IngestError::CanvasConflict(m) => (m, "auth"),
+                | IngestError::CanvasConflict(m)
+                | IngestError::MeetingConflict(m) => (m, "auth"),
             };
             reject(reason);
             conn.send(RelayMessage::ok(&event_id_hex, false, &message));
@@ -823,7 +824,8 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
                 // verbatim.
                 let (message, reason) = match e {
                     IngestError::Rejected(message) => (message, "invalid"),
-                    IngestError::CanvasConflict(message) => (message, "invalid"),
+                    IngestError::CanvasConflict(message)
+                    | IngestError::MeetingConflict(message) => (message, "invalid"),
                     IngestError::AuthFailed(message) => (message, "auth"),
                     IngestError::Internal(message) => (message, "error"),
                 };
@@ -888,7 +890,9 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
             // Sanitize internal errors — don't leak DB/system details over WS.
             let (msg, reason) = match &e {
                 IngestError::Rejected(m) => (m.clone(), "invalid"),
-                IngestError::CanvasConflict(m) => (m.clone(), "invalid"),
+                IngestError::CanvasConflict(m) | IngestError::MeetingConflict(m) => {
+                    (m.clone(), "invalid")
+                }
                 IngestError::AuthFailed(m) => (m.clone(), "auth"),
                 IngestError::Internal(_) => ("error: internal server error".to_string(), "error"),
             };

@@ -35,6 +35,8 @@ export default defineConfig({
         "**/key-import-reveal.spec.ts",
         "**/navigation.spec.ts",
         "**/channels.spec.ts",
+        "**/channel-meetings.spec.ts",
+        "**/channel-meeting-timing.spec.ts",
         "**/channel-shared-header-backdrop.spec.ts",
         "**/auxiliary-pane-close-visibility.spec.ts",
         "**/channel-composer-overflow.spec.ts",

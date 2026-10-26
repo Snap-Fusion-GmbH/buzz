@@ -488,6 +488,40 @@ buzz notes rm --name does-not-exist   # exits non-zero
 
 ---
 
+### 6.13 Channel Meetings
+
+```bash
+MEETING=$(buzz meetings create --channel "$CHANNEL_ID" \
+  --title "Weekly team sync" --starts-at 2026-10-26T10:00:00 \
+  --timezone Europe/Berlin --duration 30 --repeat weekly)
+MEETING_ID=$(echo "$MEETING" | jq -r '.meeting_id')
+buzz meetings list --channel "$CHANNEL_ID"
+buzz meetings get --channel "$CHANNEL_ID" --meeting "$MEETING_ID"
+buzz meetings occurrences --channel "$CHANNEL_ID" --meeting "$MEETING_ID" \
+  --after 2026-10-25T00:00:00Z --limit 3
+buzz meetings skip --channel "$CHANNEL_ID" --meeting "$MEETING_ID" \
+  --date 2026-11-02
+HEAD=$(buzz meetings get --channel "$CHANNEL_ID" --meeting "$MEETING_ID")
+REVISION=$(echo "$HEAD" | jq -r '.[0].id')
+echo "$HEAD" | jq -r '.[0].content' | \
+  jq '.title = "Weekly priorities"' | \
+  buzz meetings update --channel "$CHANNEL_ID" --meeting "$MEETING_ID" \
+    --expected-revision "$REVISION" --definition -
+buzz meetings cancel --channel "$CHANNEL_ID" --meeting "$MEETING_ID"
+buzz meetings occurrences --channel "$CHANNEL_ID" --meeting "$MEETING_ID"
+```
+
+The created event is kind 30623 with channel-bound `h`/`d` tags. Its JSON
+definition has no shared nudge enabled. The final occurrence query returns
+`[]` after cancellation. Skipping a date preserves the recurrence anchor.
+Updating with the old `$REVISION` after another edit must exit 5 without
+overwriting the newer head. Update input is a complete definition, bounded to
+8192 bytes, not a partial patch.
+
+The desktop Meetings tab supports the same organizer operations in stream
+channels, with no location or preparation-note fields. Automatic nudge delivery
+is not implemented; see `docs/nips/NIP-CM.md`.
+
 ## 7. Error Path Testing
 
 Verify the CLI produces correct JSON on stderr and correct exit codes.

@@ -9,6 +9,7 @@ import { getDmParticipantPreview } from "@/features/channels/lib/dmParticipantDi
 import { ChannelGlyph } from "@/features/channels/ui/ChannelGlyph";
 import { ChannelHeaderStatusBadge } from "@/features/channels/ui/ChannelHeaderStatusBadge";
 import { ChannelMembersBar } from "@/features/channels/ui/ChannelMembersBar";
+import { useChannelViewTabs } from "./ChannelViewTabsContext";
 import {
   DEFAULT_HOVER_PROFILE_STATUS_GEOMETRY,
   ProfileAvatarWithStatus,
@@ -72,6 +73,7 @@ export function ChannelScreenHeader({
   onManageChannel,
   onToggleMembers,
 }: ChannelScreenHeaderProps) {
+  const channelViewTabs = useChannelViewTabs();
   const isGroupDm =
     activeChannel?.channelType === "dm" &&
     activeDmHeaderParticipants.length > 1;
@@ -141,6 +143,7 @@ export function ChannelScreenHeader({
 
   return (
     <ChatHeader
+      footer={channelViewTabs}
       belowSystemChrome
       chromeWrapperRef={chromeWrapperRef}
       actions={actions}

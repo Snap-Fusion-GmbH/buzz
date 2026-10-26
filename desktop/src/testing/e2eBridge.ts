@@ -39,6 +39,8 @@ import {
   hasMockSubscription,
 } from "./e2eBridgeSubscriptions.ts";
 import { installMockHuddleCameraOwner } from "./e2eBridgeHuddleCamera.ts";
+import { createMeetingMock } from "./e2eBridgeMeetings";
+import { mockCommandLogPayload } from "./e2eBridgeCommandLog";
 import {
   handleMockGitHub,
   mockGitHubSnapshot,
@@ -12074,6 +12076,7 @@ export function maybeInstallE2eTauriMocks() {
       sourceUrl: null;
     };
   }> = [];
+  const handleMeetingMock = createMeetingMock();
   const handleMockCommand = async (
     command: string,
     payload: unknown,
@@ -12081,22 +12084,19 @@ export function maybeInstallE2eTauriMocks() {
     const activeConfig = getConfig();
     const identity = getActiveIdentity(activeConfig);
     window.__BUZZ_E2E_COMMANDS__?.push(command);
-    const loggedPayload = (() => {
-      if (payload instanceof Uint8Array) {
-        return { rawByteLength: payload.byteLength };
-      }
-      try {
-        return JSON.parse(JSON.stringify(payload ?? null));
-      } catch {
-        return null;
-      }
-    })();
+    const loggedPayload = mockCommandLogPayload(payload);
     window.__BUZZ_E2E_COMMAND_PAYLOADS__?.push({
       command,
       payload: loggedPayload,
     });
     window.__BUZZ_E2E_COMMAND_LOG__?.push({ command, payload });
 
+    const meetingResult = handleMeetingMock(
+      command,
+      payload,
+      getMockMemberPubkey(activeConfig),
+    );
+    if (meetingResult.handled) return meetingResult.value;
     switch (command) {
       case "get_huddle_state": {
         const snapshot = mockHuddle ? structuredClone(mockHuddle.state) : null;

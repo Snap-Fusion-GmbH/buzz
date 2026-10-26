@@ -1296,7 +1296,7 @@ async fn submit_event_authed(
                 response: api_error(StatusCode::BAD_REQUEST, &msg),
             }
         }
-        Err(IngestError::CanvasConflict(msg)) => {
+        Err(IngestError::CanvasConflict(msg) | IngestError::MeetingConflict(msg)) => {
             // Canvas CAS precondition failures are a distinct HTTP 409 so the
             // CLI's reconciliation branch (which gates on `status == 409`) is
             // reachable against the live relay.  The message body is unchanged;
