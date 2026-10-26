@@ -204,7 +204,7 @@ fn reused_builtin_is_not_retained() {
     let dir = tempfile::tempdir().unwrap();
     let scope = scope(dir.path());
 
-    let local = crate::managed_agents::built_in_persona_definition("builtin:fizz", NOW)
+    let local = crate::managed_agents::retired_builtin_persona_definition("builtin:fizz", NOW)
         .expect("builtin:fizz must exist");
     let t = team_fixture(vec![local.id.clone()]);
     let keys = nostr::Keys::generate();

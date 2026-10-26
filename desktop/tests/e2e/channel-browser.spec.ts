@@ -18,12 +18,14 @@ async function seedCustomSection(page: Page) {
 }
 
 test.beforeEach(async ({ page }, testInfo) => {
-  await installMockBridge(
-    page,
-    testInfo.title.includes("failed section create")
+  // These specs browse the full seeded directory, including the legacy
+  // starter channels, so retirement is disabled for them.
+  await installMockBridge(page, {
+    keepSeededWelcomeChannels: true,
+    ...(testInfo.title.includes("failed section create")
       ? { createChannelErrors: ["Create failed"] }
-      : undefined,
-  );
+      : {}),
+  });
 });
 
 test("keyboard shortcut opens the channel browser dialog", async ({ page }) => {

@@ -3,6 +3,7 @@ import {
   KIND_REPO_ANNOUNCEMENT,
 } from "@/shared/constants/kinds";
 import { isValidProjectChannelId } from "./projectModels";
+import type { GitHubRepository } from "@/shared/api/github";
 
 export type ProjectEventTemplate = {
   kind: number;
@@ -191,11 +192,16 @@ export function buildDefaultProjectRepositoryTemplate({
   name,
   ownerPubkey,
   projectChannelId,
+  githubRepository,
 }: {
   description?: string;
   name: string;
   ownerPubkey: string;
   projectChannelId: string;
+  githubRepository?: Pick<
+    GitHubRepository,
+    "cloneUrl" | "webUrl" | "defaultBranch"
+  >;
 }): {
   dtag: string;
   repository: ProjectEventTemplate;
@@ -222,6 +228,13 @@ export function buildDefaultProjectRepositoryTemplate({
   if (normalizedDescription) {
     repositoryTags.push(["description", normalizedDescription]);
   }
+  if (githubRepository) {
+    repositoryTags.push(
+      ["clone", githubRepository.cloneUrl],
+      ["web", githubRepository.webUrl],
+      ["default-branch", githubRepository.defaultBranch],
+    );
+  }
   return {
     dtag,
     repositoryAddress,
@@ -240,18 +253,24 @@ export function buildProjectBootstrapTemplates({
   ownerPubkey,
   projectChannelId,
   projectVisibility = "listed",
+  githubRepository,
 }: {
   description?: string;
   name: string;
   ownerPubkey: string;
   projectChannelId: string;
   projectVisibility?: ProjectListingVisibility;
+  githubRepository?: Pick<
+    GitHubRepository,
+    "cloneUrl" | "webUrl" | "defaultBranch"
+  >;
 }): ProjectBootstrapTemplates {
   const repository = buildDefaultProjectRepositoryTemplate({
     description,
     name,
     ownerPubkey,
     projectChannelId,
+    githubRepository,
   });
   const announcement = buildProjectAnnouncementTemplate({
     description,

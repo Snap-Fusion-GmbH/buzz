@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent } from "react";
+import { useEffect, useEffectEvent, useRef } from "react";
 import {
   type QueryClient,
   useMutation,
@@ -38,6 +38,7 @@ import {
 export { mergeMessages, mergeTimelineCacheMessages };
 import { splitOutgoingTags } from "@/features/messages/lib/imetaMediaMarkdown";
 import { messageMentionPubkeys } from "@/features/messages/lib/messageMentionPubkeys";
+import { recoverDuplicateReaction } from "@/features/messages/lib/recoverDuplicateReaction";
 import { buildSentFromThreadTag } from "@/features/messages/lib/sentFromThread";
 import {
   clearTimeoutState,
@@ -768,6 +769,12 @@ export function useSendMessageMutation(
 
 export function useToggleReactionMutation() {
   const queryClient = useQueryClient();
+  const generation = useRef(0);
+  useEffect(() => {
+    return () => {
+      generation.current += 1;
+    };
+  }, []);
   return useMutation<
     void,
     Error,
@@ -778,6 +785,10 @@ export function useToggleReactionMutation() {
     }
   >({
     mutationFn: async ({ eventId, emoji, remove }) => {
+      const expected = generation.current;
+      const publicKey = queryClient.getQueryData<Identity>([
+        "identity",
+      ])?.pubkey;
       if (remove) {
         await removeReaction(eventId, emoji);
         return;
@@ -790,7 +801,19 @@ export function useToggleReactionMutation() {
         emoji,
         queryClient.getQueryData<CustomEmoji[]>(customEmojiQueryKey),
       );
-      await addReaction(eventId, emoji, emojiUrl);
+      try {
+        await addReaction(eventId, emoji, emojiUrl);
+      } catch (error) {
+        if (!publicKey) throw error;
+        await recoverDuplicateReaction(
+          queryClient,
+          eventId,
+          emoji,
+          publicKey,
+          error,
+          () => generation.current === expected,
+        );
+      }
     },
   });
 }

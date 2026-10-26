@@ -31,6 +31,8 @@ pub enum ParameterizedReplaceStatus {
 pub enum ParameterizedReplacePrecondition<'a> {
     /// Apply normal NIP-33 ordering without a revision precondition.
     Unconditional,
+    /// Require the coordinate to have no live head.
+    ExpectNoHead,
     /// Require the live head to match this validated event ID.
     ExpectedRevision(&'a [u8]),
     /// Accept only an exact live-head replay and perform no mutation otherwise.
@@ -214,6 +216,15 @@ async fn replace_parameterized_event_in_transaction_impl(
             received_at,
             channel_id,
             ParameterizedReplaceStatus::ReplayOnlyMiss,
+        ));
+    }
+
+    if precondition == ParameterizedReplacePrecondition::ExpectNoHead && existing.is_some() {
+        return Ok(ParameterizedReplaceResult::new(
+            event,
+            received_at,
+            channel_id,
+            ParameterizedReplaceStatus::RevisionMismatch,
         ));
     }
 
@@ -635,6 +646,10 @@ impl Db {
             .await
     }
 }
+
+#[cfg(test)]
+#[path = "replaceable_meeting_postgres_tests.rs"]
+mod meeting_postgres_tests;
 
 #[cfg(test)]
 mod postgres_tests {

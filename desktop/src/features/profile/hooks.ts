@@ -25,7 +25,6 @@ import type {
   UpdateProfileInput,
   UserSearchResult,
   UserSearchPage,
-  UserProfileSummary,
   UsersBatchResponse,
 } from "@/shared/api/types";
 import { useIdentityQuery } from "@/shared/api/hooks";
@@ -46,6 +45,21 @@ import {
 } from "@/features/profile/lib/userLabelStorage";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { updateCachedChannelMemberDisplayName } from "@/features/channels/channelMemberProfileCache";
+import {
+  isUsersBatchEntryFresh,
+  MISSING_USER_PROFILE_FRESH_MS,
+  missingProfileRefetchInterval,
+  USERS_BATCH_ENTRY_FRESH_MS,
+  unresolvedUserProfilePubkeys,
+  usersBatchEntryKey,
+  type UsersBatchEntry,
+} from "@/features/profile/lib/userProfileFreshness";
+
+export {
+  USERS_BATCH_ENTRY_FRESH_MS,
+  usersBatchEntryKey,
+  type UsersBatchEntry,
+} from "@/features/profile/lib/userProfileFreshness";
 
 export const profileQueryKey = ["profile"] as const;
 export const contactListQueryKey = (pubkey: string) =>
@@ -282,28 +296,6 @@ export function useUserProfileQuery(pubkey?: string) {
   });
 }
 
-// Per-pubkey resolution cache backing `useUsersBatchQuery`'s delta fetch.
-// `summary: null` records a relay-confirmed miss so unknown pubkeys aren't
-// re-requested every page. Entries older than the hook's 10-minute staleTime
-// are treated as unresolved and refetched.
-export type UsersBatchEntry = {
-  summary: UserProfileSummary | null;
-  fetchedAt: number;
-};
-
-export const usersBatchEntryKey = (pubkey: string) => [
-  "users-batch-entry",
-  pubkey,
-];
-
-/**
- * How long a per-pubkey entry answers without a refetch. Exported so readers
- * outside this hook (the clipboard's paste-side identity check) apply the same
- * freshness rule rather than trusting an entry this hook already considers
- * stale.
- */
-export const USERS_BATCH_ENTRY_FRESH_MS = 10 * 60_000;
-
 /**
  * Drop the per-pubkey delta-fetch entries so the next `useUsersBatchQuery`
  * run re-fetches these profiles from the relay. Must be called anywhere a
@@ -351,7 +343,7 @@ export function useUsersBatchQuery(
     // staging; RESEARCH/PERF_STAGING_SCROLLBACK.md). Resolve from the
     // per-pubkey entry cache first and hit the network only for pubkeys not
     // freshly resolved.
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const now = Date.now();
       const profiles: UsersBatchResponse["profiles"] = {};
       const missing: string[] = [];
@@ -360,8 +352,8 @@ export function useUsersBatchQuery(
         const entry = queryClient.getQueryData<UsersBatchEntry>(
           usersBatchEntryKey(pubkey),
         );
-        if (entry && now - entry.fetchedAt < USERS_BATCH_ENTRY_FRESH_MS) {
-          if (entry.summary) profiles[pubkey] = entry.summary;
+        if (isUsersBatchEntryFresh(entry, now, pubkey)) {
+          if (entry?.summary) profiles[pubkey] = entry.summary;
           else missing.push(pubkey);
         } else {
           toFetch.push(pubkey);
@@ -369,6 +361,7 @@ export function useUsersBatchQuery(
       }
       if (toFetch.length > 0) {
         const fresh = await getUsersBatch(toFetch);
+        signal.throwIfAborted();
         if (relayUrl) {
           writeCachedUserLabels(relayUrl, fresh.profiles, fresh.missing);
         }
@@ -393,21 +386,29 @@ export function useUsersBatchQuery(
         relayUrl,
         normalizedPubkeys,
       ),
-    staleTime: USERS_BATCH_ENTRY_FRESH_MS,
+    staleTime: (query) =>
+      unresolvedUserProfilePubkeys(query.state.data).length
+        ? MISSING_USER_PROFILE_FRESH_MS
+        : USERS_BATCH_ENTRY_FRESH_MS,
+    refetchInterval: (query) =>
+      query.state.status === "error" || query.state.fetchStatus !== "idle"
+        ? false
+        : missingProfileRefetchInterval(
+            unresolvedUserProfilePubkeys(query.state.data),
+            query.state.dataUpdateCount,
+          ),
     gcTime: 5 * 60 * 1_000,
     // Override the global defaults: a cold channel needs profiles to render
     // correctly, so a single failed attempt must not leave raw npubs/broken
     // mention chips until the user manually kicks the channel. Three attempts
     // with exponential backoff cover the common transient-relay case.
     //
-    // After the retry budget exhausts, a window-focus event recovers the
-    // query — but only when it is already in an error state. Gating on
-    // query.state.status === "error" prevents unnecessary refetches for
-    // successful batches on every focus event, which broke the profile-hover
-    // E2E smoke test when unconditional focus-refetch was set.
+    // Focus retries errors and stale misses, not already-resolved profiles.
     retry: 3,
     retryDelay: (attempt) => Math.min(1_000 * 2 ** attempt, 30_000),
-    refetchOnWindowFocus: (query) => query.state.status === "error",
+    refetchOnWindowFocus: (query) =>
+      query.state.status === "error" ||
+      unresolvedUserProfilePubkeys(query.state.data).length > 0,
   });
 
   // Seed individual "user-profile" cache entries so avatar clicks are instant
@@ -419,17 +420,18 @@ export function useUsersBatchQuery(
     const profiles = query.data?.profiles;
     if (!profiles) return;
     for (const [pubkey, summary] of Object.entries(profiles)) {
-      queryClient.setQueryData<Profile>(
-        ["user-profile", pubkey],
-        (existing) =>
-          existing ?? {
-            pubkey,
-            about: null,
-            // Batch endpoint gives UserProfileSummary (no event-presence flag).
-            // These cached summaries are never used for the onboarding gate.
-            hasProfileEvent: false,
-            ...summary,
-          },
+      queryClient.setQueryData<Profile>(["user-profile", pubkey], (existing) =>
+        existing?.hasProfileEvent
+          ? existing
+          : {
+              ...existing,
+              pubkey,
+              about: existing?.about ?? null,
+              // Batch endpoint gives UserProfileSummary (no event-presence flag).
+              // These cached summaries are never used for the onboarding gate.
+              hasProfileEvent: false,
+              ...summary,
+            },
       );
     }
   }, [query.data, query.dataUpdatedAt, queryClient]);

@@ -1,0 +1,16 @@
+@import "katex/dist/katex.min.css";
+
+.katex:not(.katex-display > .katex) {
+  display: inline-flex;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-block: 0.125em;
+}
+
+.katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-block: 0.25em;
+}

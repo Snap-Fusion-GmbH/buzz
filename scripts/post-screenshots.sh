@@ -17,7 +17,8 @@ fi
 
 GH_USER=$(gh api user --jq .login)
 BRANCH="agent-screenshots/${GH_USER}"
-REPO="block/buzz"
+REPO="${BUZZ_SCREENSHOT_REPO:-block/buzz}"
+REMOTE="${BUZZ_SCREENSHOT_REMOTE:-origin}"
 
 # macOS ships bash 3.2, which lacks mapfile — build the array with read.
 PNGS=()
@@ -30,8 +31,8 @@ if [[ ${#PNGS[@]} -eq 0 ]]; then
 fi
 
 EXISTING_ENTRIES=""
-if git fetch origin "refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}" 2>/dev/null; then
-  EXISTING_ENTRIES=$(git ls-tree "origin/${BRANCH}" | grep -v $'\t'"\"\\{0,1\\}pr-${PR}--" || true)
+if git fetch "$REMOTE" "refs/heads/${BRANCH}:refs/remotes/${REMOTE}/${BRANCH}" 2>/dev/null; then
+  EXISTING_ENTRIES=$(git ls-tree "${REMOTE}/${BRANCH}" | grep -v $'\t'"\"\\{0,1\\}pr-${PR}--" || true)
 fi
 
 NEW_ENTRIES=""
@@ -52,12 +53,12 @@ COMBINED=$(printf '%s\n' "$EXISTING_ENTRIES" "$NEW_ENTRIES" | grep -v '^$')
 TREE=$(echo "$COMBINED" | git mktree)
 
 PARENT_ARGS=()
-if git rev-parse "origin/${BRANCH}" >/dev/null 2>&1; then
-  PARENT_ARGS=(-p "origin/${BRANCH}")
+if git rev-parse "${REMOTE}/${BRANCH}" >/dev/null 2>&1; then
+  PARENT_ARGS=(-p "${REMOTE}/${BRANCH}")
 fi
 # ${arr[@]+...} guards the empty-array case, which trips set -u on bash 3.2.
 COMMIT=$(git commit-tree "$TREE" ${PARENT_ARGS[@]+"${PARENT_ARGS[@]}"} -m "screenshots: PR #${PR}")
-git push --force-with-lease origin "${COMMIT}:refs/heads/${BRANCH}"
+git push --force-with-lease "$REMOTE" "${COMMIT}:refs/heads/${BRANCH}"
 
 RAW_BASE="https://raw.githubusercontent.com/${REPO}/${COMMIT}"
 

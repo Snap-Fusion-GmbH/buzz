@@ -691,7 +691,7 @@ fn test_real_builtin_round_trips_through_publish_and_plan_add() {
     use crate::managed_agents::team_catalog::{
         build_team_catalog_event, team_catalog_content_from_event, MAX_AVATAR_URL_BYTES,
     };
-    let local = crate::managed_agents::built_in_persona_definition("builtin:fizz", NOW)
+    let local = crate::managed_agents::retired_builtin_persona_definition("builtin:fizz", NOW)
         .expect("builtin:fizz must exist");
     let t = team_fixture(vec![local.id.clone()]);
     let keys = nostr::Keys::generate();

@@ -13,12 +13,15 @@ pub(crate) use agent_description::{effective_agent_description, record_effective
 #[cfg(all(test, not(target_os = "windows")))]
 pub(crate) mod admission_test_support;
 mod backend;
+pub(crate) use backend::redact_secrets_with;
 pub(crate) mod bestie_assignment;
 pub(crate) mod claude_config;
 pub(crate) mod config_bridge;
 pub(crate) mod custom_harnesses;
 mod definition_validation;
 mod discovery;
+pub(crate) use discovery::resolve_command_uncached;
+pub(crate) use discovery::{output_with_limit, output_with_timeout};
 pub(crate) mod effective_config;
 mod env_vars;
 pub(crate) mod git_bash;

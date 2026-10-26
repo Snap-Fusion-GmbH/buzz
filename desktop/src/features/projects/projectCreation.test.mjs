@@ -93,6 +93,38 @@ test("buildDefaultProjectRepositoryTemplate uses the project slug as the repo id
   assert.equal(template.repositoryAddress, `30617:${OWNER}:space-invaders-3d`);
 });
 
+test("GitHub bootstrap links the external repository without copying code to the relay", () => {
+  const templates = buildProjectBootstrapTemplates({
+    name: "Private demo",
+    ownerPubkey: OWNER,
+    projectChannelId: CHANNEL,
+    projectVisibility: "unlisted",
+    githubRepository: {
+      cloneUrl: "https://github.com/Snap-Fusion-GmbH/private-demo.git",
+      webUrl: "https://github.com/Snap-Fusion-GmbH/private-demo",
+      defaultBranch: "develop",
+    },
+  });
+  assert.ok(
+    templates.project.tags.some(
+      (tag) => tag[0] === "buzz-visibility" && tag[1] === "unlisted",
+    ),
+  );
+  assert.ok(
+    templates.repository.tags.some(
+      (tag) =>
+        tag[0] === "clone" &&
+        tag[1] === "https://github.com/Snap-Fusion-GmbH/private-demo.git",
+    ),
+  );
+  assert.ok(
+    templates.repository.tags.some(
+      (tag) => tag[0] === "default-branch" && tag[1] === "develop",
+    ),
+  );
+  assert.equal(templates.repository.content, "");
+});
+
 test("buildProjectAnnouncementTemplate rejects names without an identifier", () => {
   assert.throws(
     () =>

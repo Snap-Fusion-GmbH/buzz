@@ -486,6 +486,9 @@ pub const KIND_THREAD_WINDOW_BOUNDS: u32 = 39007;
 /// Workflow definition (parameterized replaceable, d=workflow_uuid).
 pub const KIND_WORKFLOW_DEF: u32 = 30620;
 
+/// Channel meeting series (parameterized replaceable, d=channel_uuid:meeting_uuid).
+pub const KIND_CHANNEL_MEETING: u32 = 30623;
+
 /// NIP-DV: per-viewer DM visibility snapshot (relay-signed, parameterized
 /// replaceable, d=viewer_pubkey). Carries one `h` tag per DM the viewer has
 /// hidden from their sidebar. Re-published by the relay on every hide/unhide so
@@ -518,6 +521,12 @@ pub const KIND_AGENT_OBSERVER_FRAME: u32 = 24200;
 /// Ephemeral: huddle emoji reaction burst. Channel-scoped to the ephemeral
 /// huddle channel with an `h` tag; never stored in the timeline.
 pub const KIND_HUDDLE_REACTION: u32 = 24810;
+/// Ephemeral: bounded H.264 video batches and screen-share stop notifications, scoped
+/// to the active private huddle backing channel by exactly one `h` tag.
+pub const KIND_HUDDLE_SCREEN: u32 = 24811;
+
+/// Ephemeral H.264 webcam video and camera stop notifications in a huddle.
+pub const KIND_HUDDLE_CAMERA: u32 = 24812;
 // Stream messaging
 /// NIP-29 group chat message kind. V1 used kind:10001 (replaceable range — wrong), then 40001.
 ///
@@ -751,6 +760,8 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_TYPING_INDICATOR,
     KIND_AGENT_PRESENCE,
     KIND_HUDDLE_REACTION,
+    KIND_HUDDLE_SCREEN,
+    KIND_HUDDLE_CAMERA,
     KIND_BLOSSOM_AUTH,
     KIND_OPERATOR_LISTENER_REGISTRATION,
     KIND_PAIRING,
@@ -783,6 +794,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_MEMBER_REMOVED_NOTIFICATION,
     KIND_AGENT_TURN_METRIC,
     KIND_WORKFLOW_DEF,
+    KIND_CHANNEL_MEETING,
     KIND_LONG_FORM,
     KIND_USER_STATUS,
     KIND_READ_STATE,
@@ -921,6 +933,7 @@ const _: () = assert!(is_parameterized_replaceable(KIND_MANAGED_AGENT)); // 3017
 const _: () = assert!(is_parameterized_replaceable(KIND_TEAM_CATALOG)); // 30178 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_PRIVATE_MANAGED_AGENT)); // 30179 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_WORKFLOW_DEF)); // 30620 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_CHANNEL_MEETING));
 const _: () = assert!(is_parameterized_replaceable(KIND_EVENT_REMINDER)); // 30300 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_DM_VISIBILITY)); // 30622 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_PROJECT)); // 30621 ∈ 30000–39999

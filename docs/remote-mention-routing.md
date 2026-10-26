@@ -1,8 +1,15 @@
 # Remote mention preparation and publication
 
-Owned relay agents can be selected and invited without local runtime custody.
-The picker and preparation phase evaluate policy but may admit an owned
-nonmember. Publication separately refreshes authorization for the exact eventual
+Owned and shared relay agents can be selected and invited without local runtime
+custody. In stream/forum channels, the picker and preparation phase evaluate
+policy but may admit a nonmember already discoverable in the viewer's directory.
+Shared `anyone` agents still require an existing shared channel; allowlist agents
+must explicitly admit the viewer. This does not grant discovery of arbitrary
+agent keys. DM discovery remains limited to owned agents.
+
+Preparation refreshes the selected keys against all viewer-visible memberships,
+not just the destination roster that an explicit Invite has yet to update.
+Publication separately refreshes authorization for the exact eventual
 destination, including a newly created DM. Ownership is not membership and
 cached picker evidence is never publication authorization.
 
@@ -13,17 +20,18 @@ A failed local inventory read cannot veto authenticated relay identities or
 admit stale local runtimes. Locally managed runtime readiness remains a separate
 existing path; remote identities never gain synthetic local management records.
 
-Chat offers explicit Invite or reference-only send without inviting. Failed adds,
-revoked policy, failed final authorization and cancellation preserve recoverable
-drafts. Standalone forum sends report authorization failures, but standalone
-forum invitation is a subsequent change reusing this phase contract.
+Chat offers explicit Invite or reference-only send without inviting. Standalone
+forum offers explicit Invite or Cancel, then refreshes membership before final
+authorization. Failed adds, revoked policy, failed final authorization and
+cancellation preserve recoverable drafts.
 
 Native discovery prerequisite: `docs/owned-agent-discovery.md` (PR6).
 Regression coverage: `agentAutocompleteEligibility.test.mjs`,
-`agentMentionRevalidation.test.mjs`, `useMentionSendFlow.helpers.test.mjs`,
-`submitMessageEdit.test.mjs`, `mentions.spec.ts`, and
-`remote-owned-mentions.spec.ts`. The new remote browser fixtures use a single-word
-name deliberately: mention separator behavior belongs to the independent PR1.
+`agentMentionRevalidation.test.mjs`, `agentMentionRevalidation.jsdom-test.mjs`,
+`useMentionSendFlow.helpers.test.mjs`, `submitMessageEdit.test.mjs`,
+`mentions.spec.ts`, `forum-agent-invitation.spec.ts`, and
+`remote-owned-mentions.spec.ts`. RemoteScout fixtures use a single-word name
+deliberately; the shared stream fixture also covers OpenRouter's multiword name.
 
 NIP-OA establishes ownership, not physical hosting, availability, or lifecycle
 control. Final native queries do not provide an atomic relay transaction with

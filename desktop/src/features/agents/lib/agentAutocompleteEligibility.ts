@@ -119,11 +119,7 @@ export function getMentionableAgentPubkeys({
             )
           : eligibilityScope.type === "community"
             ? relayAgentIsSharedWithUser(agent, sharedChannelIds, currentPubkey)
-            : phase === "prepare" &&
-                currentPubkey &&
-                agent.ownerPubkey &&
-                normalizePubkey(agent.ownerPubkey) ===
-                  normalizePubkey(currentPubkey)
+            : phase === "prepare"
               ? relayAgentIsSharedWithUser(
                   agent,
                   sharedChannelIds,

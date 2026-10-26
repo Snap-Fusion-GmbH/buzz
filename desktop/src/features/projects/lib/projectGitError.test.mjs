@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { projectCloneErrorPresentation } from "./projectGitError.ts";
 
-test("explains unsupported authenticated GitHub clones without exposing git output", () => {
+test("explains GitHub account access failures without exposing git output", () => {
   assert.deepEqual(
     projectCloneErrorPresentation(
       new Error(
@@ -14,12 +14,19 @@ test("explains unsupported authenticated GitHub clones without exposing git outp
     {
       title: "Repository access required",
       description:
-        "This repository requires GitHub authentication. Buzz currently clones public GitHub repositories without credentials.",
+        "GitHub sign-in and repository access are required for this account.",
     },
   );
 });
 
 test("presents missing and network failures clearly", () => {
+  assert.equal(
+    projectCloneErrorPresentation(
+      new Error("Repository not found"),
+      "https://github.com/example/private.git",
+    ).title,
+    "Repository access required",
+  );
   assert.equal(
     projectCloneErrorPresentation(new Error("Repository not found")).title,
     "Repository not found",

@@ -206,7 +206,8 @@ fn refresh_builtin_agent_avatars_updates_versions_without_stored_definitions() {
     let old_fizz = "data:image/png;base64,old-fizz";
     let fizz_hash = hex::encode(Sha256::digest(old_fizz.as_bytes()));
     let mut old_definition =
-        crate::managed_agents::built_in_persona_definition("builtin:fizz", "before").unwrap();
+        crate::managed_agents::retired_builtin_persona_definition("builtin:fizz", "before")
+            .unwrap();
     old_definition.avatar_url = Some(old_fizz.to_string());
     let old_version = crate::managed_agents::persona_events::persona_content_hash(
         &crate::managed_agents::persona_events::persona_event_content(&old_definition),
@@ -242,7 +243,7 @@ fn refresh_builtin_agent_avatars_updates_versions_without_stored_definitions() {
     let migrated: Vec<serde_json::Value> =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     let current_definition =
-        crate::managed_agents::built_in_persona_definition("builtin:fizz", "after").unwrap();
+        crate::managed_agents::retired_builtin_persona_definition("builtin:fizz", "after").unwrap();
     let current_version = crate::managed_agents::persona_events::persona_content_hash(
         &crate::managed_agents::persona_events::persona_event_content(&current_definition),
     );
@@ -315,7 +316,7 @@ fn refresh_builtin_agent_avatars_updates_uploaded_media_urls() {
     let migrated: Vec<serde_json::Value> =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     let current_definition =
-        crate::managed_agents::built_in_persona_definition("builtin:fizz", "after").unwrap();
+        crate::managed_agents::retired_builtin_persona_definition("builtin:fizz", "after").unwrap();
     let current_version = crate::managed_agents::persona_events::persona_content_hash(
         &crate::managed_agents::persona_events::persona_event_content(&current_definition),
     );

@@ -507,10 +507,9 @@ class _Recovery implements InviteJoinRecovery {
   final HostedJourneyFixture fixture;
   final InviteJoinRecoveryScope scope;
   @override
-  Future<String?> ensureStarterChannels() async {
+  Future<void> retireWelcomeChannels() async {
     fixture.recoveryScopes.add(scope);
     if (fixture.starterFailures-- > 0) throw AccountFailure.unavailable;
-    return 'general';
   }
 }
 

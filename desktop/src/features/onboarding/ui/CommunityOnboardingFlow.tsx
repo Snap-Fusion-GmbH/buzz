@@ -6,13 +6,9 @@ import {
   markCommunityOnboardingComplete,
   useCommunityOnboarding,
 } from "@/features/onboarding/communityOnboarding";
-import { initializeStarterChannels } from "@/features/onboarding/hooks";
+import { retireSeededWelcomeChannels } from "@/features/onboarding/hooks";
 import { useClaimInvite } from "@/features/onboarding/useClaimInvite";
 import { CommunityChangeOverlay } from "@/features/communities/ui/CommunityChangeOverlay";
-import {
-  takePendingWelcomeChannelForDirectEntry,
-  WELCOME_SURFACE_READY_EVENT,
-} from "@/features/onboarding/welcome";
 import { useAvatarPresentation } from "@/features/profile/avatarPresentationStore";
 import { registerAvatarWhenReady } from "@/features/profile/avatarProfileSync";
 import { profileQueryKey } from "@/features/profile/hooks";
@@ -23,9 +19,7 @@ import {
 } from "@/features/profile/ui/ProfileAvatarEditor";
 import { getProfile, updateProfile } from "@/shared/api/tauriProfiles";
 import { getIdentity, importIdentity } from "@/shared/api/tauriIdentity";
-import { listPersonas } from "@/shared/api/tauriPersonas";
 import { relayClient } from "@/shared/api/relayClient";
-import type { AgentPersona } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { useSystemColorScheme } from "@/shared/theme/useSystemColorScheme";
 import { Button } from "@/shared/ui/button";
@@ -50,20 +44,8 @@ function isRelayMembershipDeniedError(error: unknown): boolean {
   );
 }
 
-const STARTER_PERSONA_ANIMATIONS: Record<string, string> = {
-  Fizz: "/onboarding/starter-team/fizz.png",
-  Honey: "/onboarding/starter-team/honey.png",
-  Pollen: "/onboarding/starter-team/pollen.png",
-};
-
 /** Fade duration for the "entering" curtain over the mounting app. */
 const ENTERING_CURTAIN_FADE_MS = 500;
-/**
- * Safety valve: if Welcome never reports ready (slow relay, failed query),
- * fade anyway rather than stranding the user on the onboarding screen.
- */
-const ENTERING_CURTAIN_MAX_WAIT_MS = 8_000;
-
 const NEUTRAL_EMOJI_PICKER_THEME_VARS = {
   "--buzz-emoji-picker-rgb-background":
     "var(--buzz-onboarding-emoji-picker-background)",
@@ -134,26 +116,6 @@ function AvatarCircle({
   );
 }
 
-function LoadingDots({ label }: { label: string }) {
-  return (
-    <span
-      aria-label={label}
-      className="inline-flex items-center justify-center gap-1"
-      data-testid="community-team-intro-loading-dots"
-      role="status"
-    >
-      {[0, 1, 2].map((index) => (
-        <span
-          aria-hidden="true"
-          className="h-1.5 w-1.5 animate-bounce rounded-full bg-current motion-reduce:animate-none"
-          key={index}
-          style={{ animationDelay: `${index * 120}ms` }}
-        />
-      ))}
-    </span>
-  );
-}
-
 export function CommunityOnboardingFlow({
   onCancel,
   onConnect,
@@ -182,13 +144,9 @@ export function CommunityOnboardingFlow({
   const [animatedPreviewCaption, setAnimatedPreviewCaption] = React.useState<
     string | null
   >(null);
-  const [starterPersonas, setStarterPersonas] = React.useState<AgentPersona[]>(
-    [],
-  );
   const [isPending, setIsPending] = React.useState(false);
+  const finalizeInFlightRef = React.useRef(false);
   const checkedProfileTransactionRef = React.useRef<string | null>(null);
-  const [starterChannelFailureCount, setStarterChannelFailureCount] =
-    React.useState(0);
   const [deniedPubkey, setDeniedPubkey] = React.useState("");
   const [isMembershipDenied, setIsMembershipDenied] = React.useState(false);
   const [isCommunityChangeOpen, setIsCommunityChangeOpen] =
@@ -203,60 +161,20 @@ export function CommunityOnboardingFlow({
     setAvatarSquishKey((key) => key + 1);
   }, []);
 
-  // Also fetch on "entering": the curtain is a fresh mount of this component,
-  // so the team-intro fetch from the pre-curtain instance isn't in this state.
-  const isTeamIntroVisible =
-    transaction?.stage === "team-intro" ||
-    transaction?.stage === "finalizing" ||
-    transaction?.stage === "entering";
-  React.useEffect(() => {
-    if (!isTeamIntroVisible) return;
-    void listPersonas()
-      .then((personas) =>
-        setStarterPersonas(
-          ["Fizz", "Honey", "Pollen"].flatMap((name) => {
-            const persona = personas.find(
-              (candidate) => candidate.displayName === name,
-            );
-            return persona ? [persona] : [];
-          }),
-        ),
-      )
-      .catch(() => setStarterPersonas([]));
-  }, [isTeamIntroVisible]);
-
   useClaimInvite();
 
   React.useEffect(() => {
     if (transaction?.stage === "connecting") onConnect();
   }, [onConnect, transaction?.stage]);
 
-  // "Entering" curtain: the app is mounting on the Welcome route underneath.
-  // Fade out when Welcome reports its first settled render — or after a
-  // safety timeout so a slow load can never strand the user on this screen.
+  // The app mounts under this curtain after onboarding; fade it once the frame
+  // has had a chance to paint so the transition does not flash an empty shell.
   const isEnteringStage = transaction?.stage === "entering";
   React.useEffect(() => {
     if (!isEnteringStage) return;
-
-    let fadeTimer: number | null = null;
-    const beginFade = () => {
-      if (fadeTimer !== null) return;
-      setIsCurtainFading(true);
-      fadeTimer = window.setTimeout(() => {
-        clear();
-      }, ENTERING_CURTAIN_FADE_MS);
-    };
-
-    window.addEventListener(WELCOME_SURFACE_READY_EVENT, beginFade);
-    const safetyTimer = window.setTimeout(
-      beginFade,
-      ENTERING_CURTAIN_MAX_WAIT_MS,
-    );
-    return () => {
-      window.removeEventListener(WELCOME_SURFACE_READY_EVENT, beginFade);
-      window.clearTimeout(safetyTimer);
-      if (fadeTimer !== null) window.clearTimeout(fadeTimer);
-    };
+    setIsCurtainFading(true);
+    const timer = window.setTimeout(clear, ENTERING_CURTAIN_FADE_MS);
+    return () => window.clearTimeout(timer);
   }, [clear, isEnteringStage]);
 
   const retry = () =>
@@ -271,47 +189,38 @@ export function CommunityOnboardingFlow({
     markCommunityOnboardingComplete(identity.pubkey, relayUrl);
     clear();
   }, [clear, relayUrl]);
-  const finalize = React.useCallback(async () => {
-    if (isPending || !relayUrl) return;
-    setIsPending(true);
-    update({ stage: "finalizing", error: undefined });
-    try {
-      const identity = await getIdentity();
-      const result = await initializeStarterChannels(queryClient, {
-        focus: true,
-        pubkey: identity.pubkey,
-        communityScope: relayUrl,
-      });
-      if (!result.ok) throw new Error(result.reason);
-      if (result.focusChannelId) {
-        // Direct entry: point the router at the Welcome channel *before* the
-        // app mounts, so it never lands on Home first. Consume the pending
-        // entry — it exists for the Home-route fallback, and leaving it would
-        // yank a later Home visit back to Welcome.
-        takePendingWelcomeChannelForDirectEntry();
-        window.location.hash = `/channels/${result.focusChannelId}`;
+  const finalizeSetup = React.useCallback(
+    async (force = false) => {
+      if ((!force && finalizeInFlightRef.current) || !relayUrl) return;
+      finalizeInFlightRef.current = true;
+      setIsPending(true);
+      update({ stage: "finalizing", error: undefined });
+      try {
+        const identity = await getIdentity();
+        // Legacy welcome channels are retired once per identity/community.
+        // A failure is surfaced and retried on the next start; it must not be
+        // reported as setup success.
+        const result = await retireSeededWelcomeChannels();
         markCommunityOnboardingComplete(identity.pubkey, relayUrl);
-        // Keep this screen mounted as a curtain over the loading app; the
-        // "entering" stage fades it out once Welcome reports ready.
-        update({ stage: "entering", error: undefined });
-        return;
+        if (!result.ok) {
+          update({ error: result.reason });
+        }
+        // No channel is seeded any more, so the app lands on Home. Keep this
+        // screen mounted briefly as a curtain; the entering effect clears it.
+        update({
+          stage: "entering",
+          error: result.ok ? undefined : result.reason,
+        });
+      } catch (error) {
+        update({
+          error: error instanceof Error ? error.message : String(error),
+        });
+        finalizeInFlightRef.current = false;
+        setIsPending(false);
       }
-      await finish();
-    } catch (error) {
-      setStarterChannelFailureCount((count) => count + 1);
-      update({
-        error: error instanceof Error ? error.message : String(error),
-      });
-      setIsPending(false);
-    }
-  }, [finish, isPending, queryClient, relayUrl, update]);
-
-  const backToProfile = React.useCallback(() => {
-    if (isPending) return;
-    setStarterChannelFailureCount(0);
-    setTransitionDirection("backward");
-    update({ stage: "profile", error: undefined });
-  }, [isPending, update]);
+    },
+    [relayUrl, update],
+  );
 
   const isProfileStage = transaction?.stage === "profile";
   React.useEffect(() => {
@@ -323,7 +232,7 @@ export function CommunityOnboardingFlow({
       .then((profile) => {
         if (profile.hasProfileEvent) {
           setTransitionDirection("forward");
-          update({ stage: "team-intro", error: undefined }, transaction.id);
+          update({ stage: "finalizing", error: undefined }, transaction.id);
         }
       })
       .catch(() => {
@@ -331,10 +240,18 @@ export function CommunityOnboardingFlow({
         // existing path when the relay cannot answer the lookup.
       });
   }, [isProfileStage, transaction, update]);
-  const isTeamStage =
-    transaction?.stage === "team-intro" ||
-    transaction?.stage === "finalizing" ||
-    transaction?.stage === "entering";
+
+  React.useEffect(() => {
+    if (transaction?.stage !== "finalizing" || transaction.error) return;
+    void finalizeSetup();
+  }, [finalizeSetup, transaction?.error, transaction?.stage]);
+
+  React.useEffect(
+    () => () => {
+      finalizeInFlightRef.current = false;
+    },
+    [],
+  );
 
   // Seed display name and avatar from the relay profile when the profile step
   // is shown. This covers the case where the skip raced or was bypassed (e.g.,
@@ -459,7 +376,7 @@ export function CommunityOnboardingFlow({
         throw error;
       }
       setTransitionDirection("forward");
-      update({ stage: "team-intro", error: undefined });
+      update({ stage: "finalizing", error: undefined });
     } catch (error) {
       if (isRelayMembershipDeniedError(error)) {
         try {
@@ -490,7 +407,7 @@ export function CommunityOnboardingFlow({
       }
     >
       <OnboardingCard
-        allowWideContent={isTeamStage}
+        allowWideContent={false}
         backAction={
           isProfileStage
             ? {
@@ -498,30 +415,22 @@ export function CommunityOnboardingFlow({
                 onClick: onCancel,
                 testId: "community-profile-back",
               }
-            : isTeamStage
-              ? {
-                  disabled: isPending || transaction.stage === "entering",
-                  onClick: backToProfile,
-                  testId: "community-team-intro-back",
-                }
-              : undefined
+            : undefined
         }
-        current={isTeamStage ? 7 : isProfileStage ? 6 : 5}
+        current={isProfileStage ? 6 : 5}
         systemColorScheme={systemColorScheme}
         testId="community-onboarding-flow"
       >
         <OnboardingSlideTransition
           direction={transitionDirection}
-          transitionKey={`community-${isProfileStage ? "profile" : isTeamStage ? "team" : transaction.stage}-${transitionDirection}`}
+          transitionKey={`community-${isProfileStage ? "profile" : "setup"}-${transitionDirection}`}
         >
           <div
             className={cn(
               "relative mx-auto w-full text-center",
               isProfileStage
                 ? "flex max-w-[500px] flex-col items-center"
-                : isTeamStage
-                  ? "flex max-w-[760px] flex-col items-center"
-                  : "flex min-h-full max-w-[560px] flex-col justify-center",
+                : "flex min-h-full max-w-[560px] flex-col justify-center",
             )}
             data-testid="community-onboarding-body"
           >
@@ -749,78 +658,30 @@ export function CommunityOnboardingFlow({
               </>
             ) : (
               <>
-                <h1 className="text-title font-normal">
-                  Meet your starter team
+                <Users className="mx-auto h-10 w-10" />
+                <h1 className="mt-5 text-title font-normal">
+                  Setting up your community
                 </h1>
-                <p className="mx-auto mt-3 max-w-[400px] text-sm leading-6 text-foreground/80">
-                  Buzz lets you bring multiple agents into the same workspace.
-                  Your team will help you get started using Buzz.
+                <p className="mt-3 text-sm text-foreground/80">
+                  {transaction.error ?? "Preparing your workspace…"}
                 </p>
-                <div className="flex w-full flex-1 items-center justify-center py-6">
-                  {starterPersonas.length > 0 ? (
-                    <div className="grid w-full grid-cols-3 gap-6">
-                      {starterPersonas.map((persona) => {
-                        const animationUrl =
-                          STARTER_PERSONA_ANIMATIONS[persona.displayName];
-                        return (
-                          <div
-                            className="flex min-w-0 flex-col items-center gap-2"
-                            key={persona.id}
-                          >
-                            {animationUrl ? (
-                              <img
-                                alt={`${persona.displayName} animated character`}
-                                className="size-24 object-contain"
-                                data-testid={`starter-persona-${persona.displayName.toLowerCase()}`}
-                                src={animationUrl}
-                              />
-                            ) : (
-                              <ProfileAvatar
-                                avatarUrl={persona.avatarUrl}
-                                className="size-24 text-3xl"
-                                label={persona.displayName}
-                              />
-                            )}
-                            <span className="font-mono text-xs font-medium uppercase tracking-[0.15em]">
-                              {persona.displayName}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-                </div>
                 {transaction.error ? (
-                  <p className="text-sm text-destructive">
-                    {transaction.error}
-                    {starterChannelFailureCount === 1 ? " Try again." : null}
-                  </p>
-                ) : null}
-                <OnboardingFooter>
-                  <Button
-                    className={ONBOARDING_PRIMARY_CTA_CLASS}
-                    data-testid="community-team-intro-enter"
-                    disabled={isPending || transaction.stage === "entering"}
-                    onClick={() => void finalize()}
-                  >
-                    {isPending || transaction.stage === "entering" ? (
-                      <LoadingDots label="Preparing Welcome" />
-                    ) : (
-                      "Take me to Buzz"
-                    )}
-                  </Button>
-                  {starterChannelFailureCount >= 2 ? (
+                  <div className="mt-6 flex justify-center gap-3">
                     <Button
-                      className="h-9 rounded-full px-5 hover:bg-foreground/10"
-                      data-testid="community-team-intro-skip"
-                      disabled={isPending || transaction.stage === "entering"}
+                      className="rounded-full px-6"
+                      onClick={() => void finalizeSetup(true)}
+                    >
+                      Try again
+                    </Button>
+                    <Button
+                      className="rounded-full bg-foreground/10 px-5 hover:bg-foreground/15"
                       onClick={() => void finish()}
                       variant="ghost"
                     >
                       Skip for now
                     </Button>
-                  ) : null}
-                </OnboardingFooter>
+                  </div>
+                ) : null}
               </>
             )}
           </div>

@@ -20,10 +20,14 @@ pub mod event;
 pub mod filter;
 /// Git permission types — ref patterns, protection rules, policy evaluation.
 pub mod git_perms;
+/// Bounded, ephemeral huddle screen-sharing wire contract.
+pub mod huddle_screen;
 /// Shared invite-link contract constants.
 pub mod invite;
 /// Buzz kind number registry — custom event type constants.
 pub mod kind;
+/// Channel meeting definitions, signed envelopes, and timezone-aware recurrence.
+pub mod meeting;
 /// Network utilities — SSRF-safe IP classification.
 pub mod network;
 /// NIP-10 thread-marker parsing — shared `root`/`reply` marker resolver.

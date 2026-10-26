@@ -180,7 +180,7 @@ pub(super) enum DirectoryScope {
 /// Fetch the channel list from the relay at the requested [`DirectoryScope`].
 /// Called by `get_channels` (member-only poll, wrapped with hash-based
 /// short-circuit logic), `get_open_channel_directory` (discovery superset), and
-/// `ensure_starter_channels` (which needs the raw open-inclusive list).
+/// `retire_welcome_channels` (which needs the current member list).
 ///
 /// Relay round-trips run in two concurrent phases:
 /// - Phase 1 (parallel): member-chain (kind:39002→kind:39000), the non-member

@@ -26,10 +26,10 @@ typedef InviteKeyGenerator = nostr.Keys Function();
 
 const _unset = Object();
 
-/// Ensures starter-channel memberships after an invite membership claim.
+/// Retires the channels earlier releases seeded after an invite claim.
 abstract interface class InviteJoinRecovery {
-  /// Ensures the public starters and returns the preferred focus.
-  Future<String?> ensureStarterChannels();
+  /// Leaves the legacy public starters and removes the private Welcome.
+  Future<void> retireWelcomeChannels();
 }
 
 /// The active relay and signing identity a recovery instance must be bound to.
@@ -74,7 +74,6 @@ class InviteJoinState {
   final String? errorMessage;
   final bool requiresFreshInvite;
   final bool isStarterSetupRecovery;
-  final String? focusChannelId;
 
   const InviteJoinState({
     this.status = InviteJoinStatus.idle,
@@ -84,7 +83,6 @@ class InviteJoinState {
     this.errorMessage,
     this.requiresFreshInvite = false,
     this.isStarterSetupRecovery = false,
-    this.focusChannelId,
   });
 
   InviteJoinState copyWith({
@@ -95,7 +93,6 @@ class InviteJoinState {
     Object? errorMessage = _unset,
     bool? requiresFreshInvite,
     bool? isStarterSetupRecovery,
-    Object? focusChannelId = _unset,
   }) => InviteJoinState(
     status: status ?? this.status,
     invite: invite ?? this.invite,
@@ -107,9 +104,6 @@ class InviteJoinState {
     requiresFreshInvite: requiresFreshInvite ?? this.requiresFreshInvite,
     isStarterSetupRecovery:
         isStarterSetupRecovery ?? this.isStarterSetupRecovery,
-    focusChannelId: identical(focusChannelId, _unset)
-        ? this.focusChannelId
-        : focusChannelId as String?,
   );
 }
 
@@ -300,20 +294,19 @@ class InviteJoinNotifier extends Notifier<InviteJoinState> {
         baseUrl: community.relayUrl,
         nsec: community.nsec,
       );
-      final focusChannelId = await ref
+      await ref
           .read(inviteJoinRecoveryProvider)(
             InviteJoinRecoveryScope(
               relayHttpOrigin: config.baseUrl,
               nsec: config.nsec,
             ),
           )
-          .ensureStarterChannels();
+          .retireWelcomeChannels();
       await _saveStarterSetupState(community, incomplete: false);
       state = state.copyWith(
         status: InviteJoinStatus.success,
         communityName: community.name,
         isStarterSetupRecovery: false,
-        focusChannelId: focusChannelId,
       );
     } catch (error) {
       Object visibleError = error;
@@ -327,7 +320,6 @@ class InviteJoinNotifier extends Notifier<InviteJoinState> {
         errorMessage: _friendlyStarterSetupError(visibleError),
         requiresFreshInvite: false,
         isStarterSetupRecovery: true,
-        focusChannelId: null,
       );
     }
   }
@@ -460,7 +452,7 @@ String _friendlyStarterSetupError(Object error) {
       message.contains('Connection refused') ||
       message.contains('Network is unreachable') ||
       message.contains('No route to host')) {
-    return 'Starter channels could not reach the relay. Check your connection and retry setup.';
+    return 'Welcome channels could not reach the relay. Check your connection and retry setup.';
   }
-  return 'Starter channels could not be set up. Retry setup to try again.';
+  return 'Welcome channels could not be retired. Retry setup to try again.';
 }

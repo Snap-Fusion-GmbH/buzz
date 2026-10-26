@@ -87,6 +87,8 @@ jobs:
               - 'desktop/src-tauri/**'
             web:
               - 'web/**'
+              - 'desktop/packages/markdown-math/**'
+              - 'desktop/tests/helpers/animations.ts'
               - 'pnpm-lock.yaml'
             mobile:
               - 'mobile/**'

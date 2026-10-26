@@ -37,6 +37,8 @@ type ChatHeaderProps = {
   titleAdornment?: React.ReactNode;
   /** Render the chrome wrapper without an individual backdrop when a parent supplies shared blur. */
   transparentChrome?: boolean;
+  /** Optional navigation included in the measured overlaid header height. */
+  footer?: React.ReactNode;
 };
 
 const HEADER_ICON_CLASS = "h-4 w-4 text-muted-foreground";
@@ -100,6 +102,7 @@ export function ChatHeader({
   statusBadge,
   titleAdornment,
   transparentChrome = false,
+  footer,
 }: ChatHeaderProps) {
   const trimmedDescription = description?.trim() ?? "";
 
@@ -190,6 +193,7 @@ export function ChatHeader({
       )}
     >
       {header}
+      {footer}
     </div>
   );
 }

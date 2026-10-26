@@ -1815,31 +1815,6 @@ pub fn reply_anchor_is_trigger(
 /// (see [`append_channel_description`]) so an embedded newline can never
 /// spoof another `<context>` field.
 const MAX_DESCRIPTION_LEN: usize = 500;
-const MAX_PROJECT_NAME_LEN: usize = 160;
-
-fn collapse_prompt_line(raw: &str, max_chars: usize) -> Option<String> {
-    let collapsed: String = raw
-        .split(['\n', '\r'])
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ");
-    if collapsed.is_empty() {
-        return None;
-    }
-    let truncated = if collapsed.chars().count() > max_chars {
-        let end = collapsed
-            .char_indices()
-            .nth(max_chars)
-            .map(|(i, _)| i)
-            .unwrap_or(collapsed.len());
-        format!("{}…", &collapsed[..end])
-    } else {
-        collapsed
-    };
-    Some(truncated)
-}
-
 /// Append a `Description: …` field to a `<context>` body when non-empty.
 ///
 /// Preserves the author's paragraph structure: a single-line description is
@@ -1912,39 +1887,11 @@ fn append_channel_description(s: &mut String, channel_info: Option<&PromptChanne
 
 /// Append project-home identity so create operations target this project.
 fn append_project_home(s: &mut String, channel_info: Option<&PromptChannelInfo>, channel_id: Uuid) {
-    let Some(project) = channel_info.and_then(|ci| ci.project.as_ref()) else {
-        return;
-    };
-    let Some(slug) = collapse_prompt_line(&project.slug, 64) else {
-        return;
-    };
-    let name =
-        collapse_prompt_line(&project.name, MAX_PROJECT_NAME_LEN).unwrap_or_else(|| slug.clone());
-    let owner = collapse_prompt_line(&project.owner, 64).unwrap_or_default();
-    let coordinate = collapse_prompt_line(&project.coordinate, 200).unwrap_or_default();
-    s.push_str(&format!(
-        "\nProject: {name}\nProject slug: {slug}\nProject owner: {owner}\nProject coordinate: {coordinate}"
-    ));
-    match (
-        project
-            .default_repo_owner
-            .as_deref()
-            .and_then(|value| collapse_prompt_line(value, 64)),
-        project
-            .default_repo_id
-            .as_deref()
-            .and_then(|value| collapse_prompt_line(value, 64)),
-    ) {
-        (Some(repo_owner), Some(repo_id)) => {
-            s.push_str(&format!(
-                "\nDefault repository: {repo_id} (owner {repo_owner})"
-            ));
-        }
-        _ => s.push_str("\nDefault repository: none yet"),
-    }
-    s.push_str(&format!(
-        "\nThis channel is that project's home. Tasks, repositories, and files created here belong to this project. Do not run `buzz projects create`. Create a repository with `buzz repos create --id <id> --name \"…\" --channel {channel_id}`. Create tasks with `buzz issues create --channel {channel_id} --subject \"…\" --content \"…\"`."
-    ));
+    crate::prompt_project::append_project_home(
+        s,
+        channel_info.and_then(|info| info.project.as_ref()),
+        channel_id,
+    );
 }
 
 /// Format a `<context>` section from the resolved session scope and turn routing.
@@ -7333,6 +7280,7 @@ mod tests {
                 coordinate: format!("30621:{owner}:space-invaders-3d"),
                 default_repo_owner: None,
                 default_repo_id: None,
+                default_repo_clone_url: None,
             }),
         };
         let mut s =
@@ -7373,6 +7321,7 @@ mod tests {
                 coordinate: format!("30621:{owner}:space-invaders-3d"),
                 default_repo_owner: Some(owner.clone()),
                 default_repo_id: Some("space-invaders-3d".into()),
+                default_repo_clone_url: Some("https://github.com/example/private-demo.git".into()),
             }),
         };
         let prompt = format_prompt(

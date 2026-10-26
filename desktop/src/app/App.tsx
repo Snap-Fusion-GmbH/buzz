@@ -43,6 +43,7 @@ import { PendingInviteGate } from "@/features/onboarding/ui/PendingInviteGate";
 import { KeyringLockedScreen } from "@/features/onboarding/ui/KeyringLockedScreen";
 import { RelaunchRequiredScreen } from "@/features/onboarding/ui/RelaunchRequiredScreen";
 import { ResetFailedScreen } from "@/features/onboarding/ui/ResetFailedScreen";
+import { ManagedWorkspaceGate } from "@/features/onboarding/ui/ManagedWorkspaceGate";
 import { loadCommunityDiscoveryAfterLeave } from "@/features/communities/communityStorage";
 import { useCommunityInit } from "@/features/communities/useCommunityInit";
 import { useNestNotifications } from "@/features/communities/useNestNotifications";
@@ -581,13 +582,12 @@ function CommunityApp({
     transaction?.relayUrl,
   ]);
   // During "entering" the transaction stays alive as a curtain: the app mounts
-  // underneath (already pointed at the Welcome channel route) while the
-  // onboarding screen covers it, then fades once Welcome reports ready.
+  // underneath on Home while the onboarding screen covers it, then fades.
   //
   // The flow must keep ONE stable position in the element tree across every
   // stage. Rendering it from a different slot when the stage flips to
-  // "entering" would remount it — React state resets and the "Meet your
-  // starter team" screen visibly restarts mid-handoff.
+  // "entering" would remount it — React state resets and the setup screen
+  // visibly restarts mid-handoff.
   const isEnteringCurtain = transaction?.stage === "entering";
 
   // The app mounts (and starts loading data) beneath the splash overlay; the
@@ -811,7 +811,9 @@ export function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <MachineBootstrap sharedIdentity={sharedIdentity} />
+      <ManagedWorkspaceGate>
+        <MachineBootstrap sharedIdentity={sharedIdentity} />
+      </ManagedWorkspaceGate>
     </QueryClientProvider>
   );
 }

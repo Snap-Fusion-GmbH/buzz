@@ -37,6 +37,10 @@ type HuddleIndicatorProps = {
   onStart?: () => void;
   /** Whether the start action is disabled (e.g., permissions, already starting). */
   startDisabled?: boolean;
+  /** Display a text action instead of an icon-only channel toolbar button. */
+  showLabel?: boolean;
+  /** Additional views must leave the channel toolbar as the shortcut owner. */
+  enableShortcut?: boolean;
 };
 
 /**
@@ -50,8 +54,15 @@ export function HuddleIndicator({
   renderMode = "button",
   onStart,
   startDisabled,
+  showLabel = false,
+  enableShortcut = true,
 }: HuddleIndicatorProps) {
-  const { activeEphemeralChannelId, joinHuddle, isStarting } = useHuddle();
+  const {
+    activeEphemeralChannelId,
+    joinHuddle,
+    isStarting,
+    showHuddleInMainApp,
+  } = useHuddle();
   const queryClient = useQueryClient();
   const [activeHuddle, setActiveHuddle] = React.useState<ActiveHuddle | null>(
     null,
@@ -217,6 +228,7 @@ export function HuddleIndicator({
   }, []);
 
   React.useEffect(() => {
+    if (!enableShortcut) return;
     function handleHuddleShortcut(event: Event) {
       const { channelId: shortcutChannelId } = (
         event as CustomEvent<HuddleShortcutDetail>
@@ -263,6 +275,7 @@ export function HuddleIndicator({
     onStart,
     queryClient,
     startDisabled,
+    enableShortcut,
   ]);
 
   // No active huddle — render the start button (if onStart provided).
@@ -295,11 +308,14 @@ export function HuddleIndicator({
               data-testid="channel-start-huddle-trigger"
               disabled={startDisabled || isStarting}
               onClick={() => onStart()}
-              size="icon"
+              size={showLabel ? "sm" : "icon"}
               type="button"
               variant="outline"
             >
               <Headphones />
+              {showLabel ? (
+                <span>{isStarting ? "Starting…" : "Start huddle"}</span>
+              ) : null}
             </Button>
           </span>
         </TooltipTrigger>
@@ -315,6 +331,13 @@ export function HuddleIndicator({
 
   async function doJoin() {
     if (!activeHuddle || isJoining) return;
+    if (
+      showLabel &&
+      activeEphemeralChannelId === activeHuddle.ephemeralChannelId
+    ) {
+      showHuddleInMainApp(activeHuddle.ephemeralChannelId);
+      return;
+    }
     setIsJoining(true);
     try {
       await joinHuddle(
@@ -353,18 +376,32 @@ export function HuddleIndicator({
     <Tooltip>
       <TooltipTrigger asChild>
         <Button
-          aria-label={`Join active huddle (${participantCount} participant${participantCount !== 1 ? "s" : ""})`}
+          aria-label={
+            showLabel
+              ? undefined
+              : `Join active huddle (${participantCount} participant${participantCount !== 1 ? "s" : ""})`
+          }
           className={cn("relative", className)}
-          disabled={isJoining || isStarting}
+          disabled={isJoining || isStarting || (showLabel && startDisabled)}
           onClick={() => void doJoin()}
-          size="icon"
+          size={showLabel ? "sm" : "icon"}
           type="button"
           variant="outline"
         >
           <Headphones />
-          <span className="absolute inset-0 animate-pulse rounded-lg ring-2 ring-border/70" />
+          {showLabel ? (
+            <span>
+              {activeEphemeralChannelId === activeHuddle.ephemeralChannelId
+                ? "Open huddle"
+                : isJoining
+                  ? "Joining…"
+                  : "Join huddle"}
+            </span>
+          ) : (
+            <span className="absolute inset-0 animate-pulse rounded-lg ring-2 ring-border/70" />
+          )}
           {/* Participant count badge */}
-          {participantCount > 0 && (
+          {!showLabel && participantCount > 0 && (
             <span className="absolute -right-1 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full border border-border bg-background px-0.5 text-2xs font-bold text-muted-foreground">
               {participantCount}
             </span>

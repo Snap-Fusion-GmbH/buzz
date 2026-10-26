@@ -402,13 +402,14 @@ mod tests {
     #[test]
     fn build_env_map_drops_baked_access_gate_keys() {
         use base64::Engine as _;
-        let raw = "BUZZ_ACP_RESPOND_TO=anyone\nBUZZ_ACP_ALLOWED_RESPOND_TO=anyone\nBUZZ_ACP_RESPOND_TO_ALLOWLIST=deadbeef\nDATABRICKS_MODEL=goose-claude-opus-4-8";
+        let raw = "BUZZ_ACP_RESPOND_TO=anyone\nBUZZ_ACP_ALLOWED_RESPOND_TO=anyone\nBUZZ_ACP_RESPOND_TO_ALLOWLIST=deadbeef\nBUZZ_ACP_ALLOW_SHARED_DMS=true\nDATABRICKS_MODEL=goose-claude-opus-4-8";
         let blob = base64::engine::general_purpose::STANDARD.encode(raw.as_bytes());
         let map = build_env_map(None, None, Some(&blob));
         for key in [
             "BUZZ_ACP_RESPOND_TO",
             "BUZZ_ACP_ALLOWED_RESPOND_TO",
             "BUZZ_ACP_RESPOND_TO_ALLOWLIST",
+            "BUZZ_ACP_ALLOW_SHARED_DMS",
         ] {
             assert!(
                 !map.contains_key(key),

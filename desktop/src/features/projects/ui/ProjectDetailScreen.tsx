@@ -108,6 +108,9 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
   }, [projectId, repositoryId]);
   const repository = selectProjectRepository(project, routeRepositoryId);
   const repoRemote = useProjectRepoPresentation(repository);
+  const isGitHubRemote =
+    repoRemote.host.kind === "external" &&
+    repoRemote.host.host === "github.com";
   const { applyPatch: applyRepositorySearch } = useHistorySearchState(
     PROJECT_REPOSITORY_SEARCH_KEYS,
   );
@@ -220,6 +223,7 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
     activeRepoPullRequest,
     activeTag,
     isBuzzHost: repoRemote.host.kind === "buzz",
+    isGitHubHost: isGitHubRemote,
     repository,
     reposDir: activeCommunity?.reposDir,
     repoSource,
@@ -230,7 +234,7 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
   const memberChannelIds = useMemberChannelIds();
   const remoteUnavailableReason =
     repoRemote.host.kind === "buzz" &&
-    !repoSnapshotQuery.isLoading &&
+    repoSnapshotQuery.isError &&
     !displayedRepoSnapshot
       ? refineRepoUnavailableReason({
           reason: projectRepoUnavailableReason(repoSnapshotQuery.error),
@@ -324,6 +328,15 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
     localHead: repoSyncStatusQuery.data?.localHead,
   });
   const handleFetchRepo = React.useCallback(async () => {
+    if (!repository?.cloneUrls[0]) {
+      const refreshed = await projectQuery.refetch();
+      if (refreshed.error) {
+        toast.error("Could not refresh project metadata.", {
+          description: "Check your connection and try again.",
+        });
+      }
+      return;
+    }
     const results = await Promise.all([
       repoSnapshotQuery.refetch(),
       repoStateQuery.refetch(),
@@ -331,6 +344,10 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
     ]);
     const error = results.find((result) => result.error)?.error;
     if (error) {
+      if (isGitHubRemote) {
+        showProjectCloneErrorToast(error, repository?.cloneUrls[0]);
+        return;
+      }
       const reason = refineRepoUnavailableReason({
         reason: projectRepoUnavailableReason(error),
         repositoryChannelId: repository?.channelId,
@@ -344,11 +361,14 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
     }
     toast.success("Remote state refreshed.");
   }, [
+    isGitHubRemote,
     memberChannelIds,
+    projectQuery.refetch,
     repoSnapshotQuery,
     repoStateQuery,
     repoSyncStatusQuery,
     repository?.channelId,
+    repository?.cloneUrls[0],
   ]);
   const cloneBlockedByRemote =
     remoteUnavailableReason !== undefined &&
@@ -457,7 +477,11 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
       if (repoSource !== "remote") setRepoSource("remote");
       return;
     }
-    if (repoSource === "local" && !hasLocalCheckout) {
+    if (
+      repoSource === "local" &&
+      !hasLocalCheckout &&
+      localRepoSnapshotQuery.isSuccess
+    ) {
       setRepoSource("remote");
       return;
     }
@@ -472,6 +496,7 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
   }, [
     displayedRepoSnapshot,
     hasLocalCheckout,
+    localRepoSnapshotQuery.isSuccess,
     repoSource,
     selectedPullRequestId,
     selectedTag,
@@ -761,6 +786,7 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
   };
   const agentPageContext = buildProjectDetailAgentContext({
     activeTab,
+    localRepositoryPath: filesSourceControls.localPath,
     branch: activeBranch,
     file: filesContext,
     project,
@@ -961,7 +987,7 @@ export function ProjectDetailScreen(props: ProjectDetailScreenProps) {
                     snapshot={displayedRepoSnapshot}
                     snapshotError={repoSnapshotQuery.error}
                     snapshotLoading={
-                      repoSnapshotQuery.isLoading && !displayedRepoSnapshot
+                      repoSnapshotQuery.isPending && !displayedRepoSnapshot
                     }
                     sourceControls={filesSourceControls}
                     viewerGitIdentity={viewerGitIdentity}

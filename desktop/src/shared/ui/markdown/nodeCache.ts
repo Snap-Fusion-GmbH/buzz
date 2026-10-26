@@ -1,3 +1,4 @@
+import { rehypeBoundedKatex, remarkBoundedMath } from "@buzz/markdown-math";
 import type * as React from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
@@ -89,6 +90,7 @@ function listSegment(values: readonly string[] | undefined): string {
 
 function buildMarkdownElement(input: MarkdownParseInputs): React.ReactElement {
   markdownParseCount += 1;
+  const hasMath = input.content.includes("$") || input.content.includes("math");
   // biome-ignore lint/suspicious/noExplicitAny: PluggableList type not directly importable
   const rehypePlugins: any[] = [rehypeImageGallery];
   if (input.leadingInlineContent) {
@@ -97,25 +99,32 @@ function buildMarkdownElement(input: MarkdownParseInputs): React.ReactElement {
   if (input.searchQuery && input.searchQuery.trim().length >= 1) {
     rehypePlugins.push([rehypeSearchHighlight, { query: input.searchQuery }]);
   }
+  if (hasMath) {
+    rehypePlugins.push(rehypeBoundedKatex);
+  }
   // Called as a plain function rather than rendered as <ReactMarkdown/>:
   // react-markdown's `Markdown` is synchronous and hook-free (the hook
   // variant is `MarkdownHooks`), so this returns the parsed element tree
   // directly, which is what lets it live in a module-level cache.
+  // biome-ignore lint/suspicious/noExplicitAny: PluggableList type not directly importable
+  const remarkPlugins: any[] = [
+    remarkGfm,
+    ...(input.hardLineBreaks === false ? [] : [remarkBreaks]),
+    remarkSpoilers,
+    remarkChannelDeepLinks,
+    remarkMessageLinks,
+    remarkEntityLinks,
+    [remarkMentions, { mentionNames: input.mentionNames }],
+    [remarkChannelLinks, { channelNames: input.channelNames }],
+    [remarkCustomEmoji, { customEmoji: input.customEmoji }],
+  ];
+  if (hasMath) {
+    remarkPlugins.push(remarkBoundedMath);
+  }
   return ReactMarkdown({
     children: input.content,
     components: input.components,
-    remarkPlugins: [
-      remarkGfm,
-      ...(input.hardLineBreaks === false ? [] : [remarkBreaks]),
-      remarkSpoilers,
-      remarkChannelDeepLinks,
-      remarkMessageLinks,
-      remarkEntityLinks,
-      [remarkMentions, { mentionNames: input.mentionNames }],
-      [remarkChannelLinks, { channelNames: input.channelNames }],
-      [remarkCustomEmoji, { customEmoji: input.customEmoji }],
-      // biome-ignore lint/suspicious/noExplicitAny: PluggableList type not directly importable
-    ] as any[],
+    remarkPlugins,
     rehypePlugins,
     urlTransform: buzzDeepLinkUrlTransform,
   });

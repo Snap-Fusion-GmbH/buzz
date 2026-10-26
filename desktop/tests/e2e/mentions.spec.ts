@@ -2660,6 +2660,69 @@ test("a send held open by a no-write step still revalidates at the publish bound
   }
 });
 
+for (const selection of ["keyboard", "pointer"] as const) {
+  test(`shared agents can be invited outside their existing channels (${selection})`, async ({
+    page,
+  }) => {
+    await installMockBridge(page, {
+      relayAgents: [
+        {
+          pubkey: ALLOWLIST_RELAY_AGENT_PUBKEY,
+          name: "OpenRouter Free Model",
+          respondTo: "anyone",
+          channelNames: ["general"],
+        },
+      ],
+    });
+    await page.goto("/");
+    await page.getByTestId("channel-random").click();
+    await expect(page.getByTestId("chat-title")).toHaveText("random");
+
+    const input = page.getByTestId("message-input");
+    await input.fill("@OpenRouter");
+    const suggestion = autocomplete(page).getByTestId(
+      `mention-suggestion-${ALLOWLIST_RELAY_AGENT_PUBKEY}`,
+    );
+    await expect(suggestion.getByText("not in channel")).toBeVisible();
+    if (selection === "keyboard") {
+      await input.press("Enter");
+    } else {
+      await suggestion
+        .getByRole("button", {
+          name: "Mention OpenRouter Free Model",
+          exact: true,
+        })
+        .click();
+    }
+    await page.keyboard.type("hello");
+    const content = "@OpenRouter Free Model hello";
+    await expect(input).toHaveText(content);
+    const baselinePayloadCount = (await readCommandPayloadLog(page)).length;
+    await page.getByTestId("send-message").click();
+    const invite = page.getByRole("button", { name: "Invite", exact: true });
+    await expect(invite).toBeVisible();
+    expect(
+      (await readCommandPayloadLog(page))
+        .slice(baselinePayloadCount)
+        .some((entry) => entry.command === "add_channel_members"),
+    ).toBe(false);
+    expect(await readOutgoingMentionPubkeys(page, content)).toBeNull();
+    await invite.click();
+    await expect
+      .poll(() => readOutgoingMentionPubkeys(page, content))
+      .toContain(ALLOWLIST_RELAY_AGENT_PUBKEY);
+    expect(
+      (await readCommandPayloadLog(page))
+        .slice(baselinePayloadCount)
+        .find((entry) => entry.command === "add_channel_members")?.payload,
+    ).toMatchObject({
+      channelId: "9dae0116-799b-5071-a0a8-fdd30a91a35d",
+      pubkeys: [ALLOWLIST_RELAY_AGENT_PUBKEY],
+      role: "bot",
+    });
+  });
+}
+
 test("selected relay agents are invited as bots before sending", async ({
   page,
 }) => {
@@ -2896,7 +2959,7 @@ test("owner-only builds show verified same-owner relay agents", async ({
   await expect(autocomplete(page).getByText("quinn")).toBeVisible();
 });
 
-test("relay-only allowlisted agents stay hidden outside their channel", async ({
+test("relay-only allowlisted agents offer Invite outside their channel", async ({
   page,
 }) => {
   await installMockBridge(page, {
@@ -2916,7 +2979,11 @@ test("relay-only allowlisted agents stay hidden outside their channel", async ({
 
   await page.getByTestId("message-input").fill("@quinn");
 
-  await expect(autocomplete(page)).toHaveCount(0);
+  const suggestion = autocomplete(page).getByTestId(
+    `mention-suggestion-${ALLOWLIST_RELAY_AGENT_PUBKEY}`,
+  );
+  await expect(suggestion.getByText("quinn", { exact: true })).toBeVisible();
+  await expect(suggestion.getByText("not in channel")).toBeVisible();
 });
 
 test("owner-only builds admit cross-owner relay agents authorized for anyone", async ({
@@ -3301,7 +3368,7 @@ test("a detached start fired before a real community switch fails closed and kee
           pubkey: IN_CHANNEL_MANAGED_AGENT_PUBKEY,
           name: "fizz",
           status: "stopped",
-          channelNames: ["general"],
+          channelNames: ["engineering"],
         },
       ],
       // Holds the start open long enough for the real switch below to
@@ -3319,8 +3386,8 @@ test("a detached start fired before a real community switch fails closed and kee
     { list: [COMMUNITY_A, COMMUNITY_B], active: COMMUNITY_A.id },
   );
   await page.goto("/");
-  await page.getByTestId("channel-general").click();
-  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await page.getByTestId("channel-engineering").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("engineering");
 
   const input = page.getByTestId("message-input");
   await input.fill("Hey @fizz");
@@ -3387,7 +3454,7 @@ test("a detached start fired before a real community switch fails closed and kee
   // snapshots, not retrying toHaveCount(0) assertions — a retry would simply
   // wait out the toast's auto-dismiss and pass against the very toast it
   // forbids.
-  await expect(page.getByTestId("channel-general")).toBeVisible();
+  await expect(page.getByTestId("channel-engineering")).toBeVisible();
   expect(
     await page.getByText("Could not start fizz", { exact: false }).count(),
   ).toBe(0);
@@ -3428,7 +3495,7 @@ test("a deploy held across an A→B→A community round-trip is not fired twice"
           pubkey: OUT_OF_CHANNEL_PROVIDER_AGENT_PUBKEY,
           name: "portal",
           status: "not_deployed",
-          channelNames: ["general"],
+          channelNames: ["engineering"],
           backend: {
             type: "provider",
             id: "portal",
@@ -3456,8 +3523,8 @@ test("a deploy held across an A→B→A community round-trip is not fired twice"
     { list: [COMMUNITY_A, COMMUNITY_B], active: COMMUNITY_A.id },
   );
   await page.goto("/");
-  await page.getByTestId("channel-general").click();
-  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await page.getByTestId("channel-engineering").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("engineering");
 
   const sendMention = async (text: string) => {
     const input = page.getByTestId("message-input");
@@ -3508,8 +3575,8 @@ test("a deploy held across an A→B→A community round-trip is not fired twice"
   await expect(
     page.getByTestId(`community-rail-button-${COMMUNITY_A.id}`),
   ).toHaveAttribute("aria-current", "true");
-  await page.getByTestId("channel-general").click();
-  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await page.getByTestId("channel-engineering").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("engineering");
 
   // Back in A, the held deploy's scope is valid again and the record still
   // reads `not_deployed`, so this send queues a wake — the retained map entry

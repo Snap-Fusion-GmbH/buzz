@@ -962,7 +962,7 @@ async fn run_active_audio_connection(
     // the pubkey before the stored-owner read, so a concurrent owner link
     // either closes this socket or is seen by the read.
     if let Some(owner) = nip_oa_owner {
-        control.bind_owner(owner.to_bytes());
+        control.bind_delegated_owner(owner.to_bytes());
     }
     control.bind_pubkey(pubkey.to_bytes());
     let owner =

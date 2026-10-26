@@ -98,7 +98,6 @@ fn repo_authorizes_project(repo: &Event, project: &Event) -> bool {
 
 fn repo_from_announcement(event: &Event, channel: &str) -> Option<ChannelProjectRepo> {
     if event.kind.as_u16() != KIND_GIT_REPO_ANNOUNCEMENT as u16
-        || repo_is_unlisted(event)
         || first_tag_value(event, "buzz-channel") != Some(channel)
     {
         return None;
@@ -115,7 +114,7 @@ fn pick_authoritative_project<'a>(
     channel: &str,
 ) -> Result<Option<(&'a Event, ChannelProjectRepo)>, CliError> {
     let mut matches = projects.iter().filter_map(|project| {
-        if project_is_unlisted(project) {
+        if first_tag_value(project, "buzz-channel") != Some(channel) {
             return None;
         }
         project_member_repos(project).find_map(|member| {
@@ -148,15 +147,6 @@ pub(crate) fn parse_repo_a_tag(value: &str) -> Option<ChannelProjectRepo> {
     Some(ChannelProjectRepo {
         repo_owner: owner.to_ascii_lowercase(),
         repo_id: id.to_string(),
-    })
-}
-
-fn repo_is_unlisted(event: &Event) -> bool {
-    event.tags.iter().any(|tag| {
-        matches!(
-            tag.as_slice(),
-            [name, value, ..] if name == "buzz-visibility" && value == "unlisted"
-        )
     })
 }
 
@@ -339,7 +329,7 @@ mod tests {
     }
 
     #[test]
-    fn authorized_project_selects_channel_bound_member() {
+    fn authorized_project_selects_channel_bound_member_even_when_unlisted() {
         let owner = nostr::Keys::generate();
         let channel = "11111111-1111-4111-8111-111111111111";
         let owner_hex = owner.public_key().to_hex();
@@ -347,7 +337,11 @@ mod tests {
         let repo = signed_event(
             &owner,
             30617,
-            vec![tag(&["d", "game"]), tag(&["buzz-channel", channel])],
+            vec![
+                tag(&["d", "game"]),
+                tag(&["buzz-channel", channel]),
+                tag(&["buzz-visibility", "unlisted"]),
+            ],
         );
         let project = signed_event(
             &owner,
@@ -356,13 +350,25 @@ mod tests {
                 tag(&["d", "game"]),
                 tag(&["buzz-channel", channel]),
                 tag(&["a", &repo_coord]),
+                tag(&["buzz-visibility", "unlisted"]),
             ],
         );
-        let (_, selected) = pick_authoritative_project(&[project], &[repo], channel)
-            .unwrap()
-            .unwrap();
+        let (_, selected) = pick_authoritative_project(
+            std::slice::from_ref(&project),
+            std::slice::from_ref(&repo),
+            channel,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(selected.repo_owner, owner_hex);
         assert_eq!(selected.repo_id, "game");
+        assert!(pick_authoritative_project(
+            &[project],
+            &[repo],
+            "22222222-2222-4222-8222-222222222222",
+        )
+        .unwrap()
+        .is_none());
     }
 
     #[test]

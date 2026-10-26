@@ -447,6 +447,8 @@ pub enum IngestError {
     /// [`IngestError::Rejected`] so the HTTP bridge can map it to
     /// `409 CONFLICT` while generic client mistakes remain `400 BAD_REQUEST`.
     CanvasConflict(String),
+    /// Channel meeting revision conflict — WS: OK false, HTTP: 409.
+    MeetingConflict(String),
     /// Auth/scope error — WS: OK false, HTTP: 401/403.
     AuthFailed(String),
     /// Server error — WS: OK false, HTTP: 500.
@@ -500,6 +502,11 @@ fn map_push_accept_error(error: super::push_lease::AcceptError) -> IngestError {
 /// Returns `Err` for unknown kinds — the relay rejects them.
 fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static str> {
     match kind {
+        buzz_core::kind::KIND_CHANNEL_MEETING => {
+            buzz_core::meeting::parse_channel_meeting(event)
+                .map_err(|_| "invalid: malformed channel meeting")?;
+            Ok(Scope::MessagesWrite)
+        }
         KIND_PROFILE => Ok(Scope::UsersWrite),
         KIND_TEXT_NOTE | KIND_LONG_FORM | buzz_core::kind::KIND_ARTIFACT => Ok(Scope::MessagesWrite),
         KIND_CONTACT_LIST | KIND_READ_STATE | KIND_USER_STATUS | KIND_AGENT_ENGRAM
@@ -783,6 +790,7 @@ pub(crate) fn requires_h_channel_scope(kind: u32) -> bool {
     matches!(
         kind,
         KIND_STREAM_MESSAGE
+            | buzz_core::kind::KIND_CHANNEL_MEETING
             | KIND_STREAM_MESSAGE_V2
             | KIND_STREAM_MESSAGE_EDIT
             | KIND_STREAM_MESSAGE_PINNED
@@ -3553,6 +3561,8 @@ async fn ingest_event_inner(
             .replace_addressable_event(tenant.community(), &event, channel_id)
             .await
             .map_err(|e| IngestError::Internal(format!("error: {e}")))?
+    } else if kind_u32 == buzz_core::kind::KIND_CHANNEL_MEETING {
+        super::meetings::persist_meeting(state, tenant, &event, channel_id).await?
     } else if is_parameterized_replaceable(kind_u32) {
         // NIP-33 parameterized replaceable — keyed by (kind, pubkey, d_tag).
         let d_tag = buzz_db::event::extract_d_tag(&event).unwrap_or_default();
@@ -3719,6 +3729,10 @@ async fn ingest_event_inner(
         message,
     })
 }
+
+#[cfg(test)]
+#[path = "meeting_ingest_tests.rs"]
+mod meeting_ingest_tests;
 
 #[cfg(test)]
 mod postgres_tests {

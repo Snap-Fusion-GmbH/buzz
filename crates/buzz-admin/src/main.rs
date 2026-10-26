@@ -107,6 +107,16 @@ enum Command {
         #[arg(long, default_value_t = buzz_db::partition::PARTITION_MANAGER_MONTHS_AHEAD)]
         months_ahead: u32,
     },
+    /// Create the bounded monthly runway using an explicitly configured DDL owner.
+    PartitionMaintain {
+        /// Future months to maintain, bounded to two years.
+        #[arg(long, default_value_t = buzz_db::partition::PARTITION_MANAGER_MONTHS_AHEAD,
+              value_parser = clap::value_parser!(u32).range(1..=24))]
+        months_ahead: u32,
+        /// Replace only an empty right-edge catch-all with dedicated monthlies.
+        #[arg(long)]
+        advance_empty_catch_all: bool,
+    },
     /// Inspect deployment-wide Buzz product feedback.
     ProductFeedback {
         #[command(subcommand)]
@@ -200,6 +210,10 @@ async fn run(cli: Cli) -> Result<i32> {
         }
         Command::StorageSnapshot { max_objects } => cmd_storage_snapshot(max_objects).await,
         Command::PartitionAudit { months_ahead } => cmd_partition_audit(months_ahead).await,
+        Command::PartitionMaintain {
+            months_ahead,
+            advance_empty_catch_all,
+        } => cmd_partition_maintain(months_ahead, advance_empty_catch_all).await,
         Command::AddMember { pubkey, role } => cmd_add_member(pubkey, role).await,
         Command::RemoveMember { pubkey, role } => cmd_remove_member(pubkey, role).await,
         Command::RepublishMembers => cmd_republish_members().await,
@@ -439,6 +453,45 @@ async fn cmd_partition_audit(months_ahead: u32) -> Result<i32> {
         })?
     );
     Ok(code)
+}
+
+async fn cmd_partition_maintain(months_ahead: u32, advance_empty_catch_all: bool) -> Result<i32> {
+    let database_url = std::env::var("DATABASE_URL")
+        .map_err(|_| anyhow::anyhow!("DATABASE_URL is required for partition-maintain"))?;
+    let config = DbConfig {
+        database_url,
+        max_connections: 1,
+        min_connections: 1,
+        statement_timeout_ms: 30_000,
+        ..DbConfig::default()
+    };
+    let db = Db::from_pool(Db::connect_writer_pool(&config).await?);
+    db.maintain_partitions(
+        months_ahead,
+        buzz_db::partition::PartitionMaintenancePolicy {
+            create_enabled: true,
+            advance_enabled: advance_empty_catch_all,
+        },
+    )
+    .await?;
+    let report = db.audit_partitions_report(months_ahead).await;
+    let outcome = report.outcome();
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "schema_version": 1,
+            "mode": "explicit_owner_maintenance",
+            "months_ahead": months_ahead,
+            "advance_empty_catch_all": advance_empty_catch_all,
+            "outcome": outcome,
+            "report": report,
+        }))?
+    );
+    Ok(if matches!(outcome, PartitionAuditOutcome::Ok) {
+        0
+    } else {
+        2
+    })
 }
 
 /// Exit nonzero only when the audit is incomplete or a table cannot serve.
@@ -923,6 +976,33 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn partition_maintenance_requires_an_explicit_bounded_plan() {
+        let cli = Cli::try_parse_from([
+            "buzz-admin",
+            "partition-maintain",
+            "--months-ahead",
+            "6",
+            "--advance-empty-catch-all",
+        ])
+        .expect("parse explicit owner maintenance");
+        assert!(matches!(
+            cli.command,
+            Command::PartitionMaintain {
+                months_ahead: 6,
+                advance_empty_catch_all: true
+            }
+        ));
+        for horizon in ["0", "25"] {
+            assert!(Cli::try_parse_from([
+                "buzz-admin",
+                "partition-maintain",
+                "--months-ahead",
+                horizon,
+            ])
+            .is_err());
+        }
+    }
     const OWNER: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     #[test]

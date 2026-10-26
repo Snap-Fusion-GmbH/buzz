@@ -243,6 +243,7 @@ impl RelayInfo {
         }
 
         let mut supported_extensions = vec![
+            "nip-cm".to_string(),
             "nip-er".to_string(),
             "nip-ar".to_string(),
             // NIP-CL: identity tags, labels and system channels.
@@ -583,6 +584,23 @@ mod tests {
             SUPPORTED_NIPS.contains(&56),
             "NIP-56 (reporting) must be advertised — kind:1984 ingest is live"
         );
+    }
+
+    #[test]
+    fn channel_meeting_support_is_advertised() {
+        let info = RelayInfo::build(
+            None,
+            None,
+            RelayCapabilityFlags::default(),
+            DEFAULT_MAX_FRAME_BYTES,
+            None,
+            None,
+            None,
+        );
+        assert!(info
+            .supported_extensions
+            .as_ref()
+            .is_some_and(|extensions| extensions.iter().any(|extension| extension == "nip-cm")));
     }
 
     #[test]

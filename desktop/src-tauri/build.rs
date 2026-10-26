@@ -7,7 +7,22 @@ include!("src/managed_agents/reserved_env_keys.rs");
 
 use base64::Engine as _;
 
+#[path = "src/managed_workspace_config.rs"]
+#[allow(dead_code)] // Build-time validation does not open runtime keyrings.
+mod managed_workspace_config;
+
 fn main() {
+    println!("cargo:rerun-if-env-changed=BUZZ_BUILD_MANAGED_WORKSPACE");
+    if let Ok(raw) = std::env::var("BUZZ_BUILD_MANAGED_WORKSPACE") {
+        let config = managed_workspace_config::ManagedWorkspaceConfig::parse(&raw)
+            .unwrap_or_else(|_| panic!("BUZZ_BUILD_MANAGED_WORKSPACE is invalid"));
+        if std::env::var("BUZZ_BUILD_AGENT_ENV").is_ok() {
+            panic!("Managed builds must not bake generic agent environment values");
+        }
+        let encoded = serde_json::to_string(&config)
+            .unwrap_or_else(|_| panic!("Cannot encode managed workspace configuration"));
+        println!("cargo:rustc-env=BUZZ_DESKTOP_BUILD_MANAGED_WORKSPACE={encoded}");
+    }
     println!("cargo:rerun-if-env-changed=BUZZ_RELAY_URL");
     println!("cargo:rerun-if-env-changed=BUZZ_RELAY_HTTP");
     println!("cargo:rerun-if-env-changed=BUZZ_UPDATER_PUBLIC_KEY");

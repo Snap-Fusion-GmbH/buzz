@@ -136,6 +136,7 @@ export function useProjectDetailGitViews({
   activeRepoPullRequest,
   activeTag,
   isBuzzHost,
+  isGitHubHost = false,
   repository,
   reposDir,
   repoSource,
@@ -147,6 +148,7 @@ export function useProjectDetailGitViews({
   activeRepoPullRequest: ProjectPullRequest | null | undefined;
   activeTag: { commit: string; name: string } | null;
   isBuzzHost: boolean;
+  isGitHubHost?: boolean;
   repository: Repository | null | undefined;
   reposDir?: string | null;
   repoSource: "local" | "remote";
@@ -159,7 +161,7 @@ export function useProjectDetailGitViews({
     activeBranch,
     selectedTag ? null : selectedBranchPullRequest,
     activeTag,
-    isBuzzHost,
+    isBuzzHost || isGitHubHost,
   );
   const displayedRepoSnapshot = useRetainedRepoSnapshot(
     `${repository?.id}:${activeBranch}:${selectedTag ? activeTag?.name : selectedBranchPullRequest?.id}:${selectedTag ? activeTag?.commit : selectedBranchPullRequest?.commit}`,

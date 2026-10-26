@@ -48,11 +48,10 @@ test("no-selection spoiler applies to every composer paragraph", async ({
   page,
 }) => {
   await installSpoilerBridge(page);
-  await page.context().grantPermissions(["clipboard-read", "clipboard-write"], {
-    origin: "http://127.0.0.1:4173",
-  });
-
   await page.goto("/");
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"], {
+    origin: new URL(page.url()).origin,
+  });
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("chat-title")).toHaveText("general");
 

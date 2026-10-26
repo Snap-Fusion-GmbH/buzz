@@ -34,14 +34,15 @@ export function projectCloneErrorPresentation(
     };
   }
   if (
-    /\b(?:401|403)\b|authenticat|authoriz|permission denied|access denied|ssh certificate/.test(
+    (github && /\b404\b|repository not found/.test(message)) ||
+    /\b(?:401|403)\b|authenticat|authoriz|permission denied|access denied|ssh certificate|could not read (?:username|password)|terminal prompts disabled/.test(
       message,
     )
   ) {
     return {
       title: "Repository access required",
       description: github
-        ? "This repository requires GitHub authentication. Buzz currently clones public GitHub repositories without credentials."
+        ? "GitHub sign-in and repository access are required for this account."
         : "Buzz could not authenticate with this repository. Check your access and try again.",
     };
   }

@@ -31,6 +31,9 @@ export function useProjectRepoPresentation(
       externalUrl: host.kind === "external" ? webUrl : null,
       remoteKind: host.kind === "unresolved" ? undefined : host.kind,
       remoteLabel: host.kind === "external" ? host.host : "Remote",
+      supportsGitSync:
+        host.kind === "buzz" ||
+        (host.kind === "external" && host.host === "github.com"),
     },
   };
 }

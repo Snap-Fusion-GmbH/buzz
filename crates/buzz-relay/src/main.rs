@@ -929,6 +929,7 @@ async fn run_relay_main(boot: BootTracker) -> anyhow::Result<()> {
         app_state.nip_fi_resolver = Some(resolver);
     }
     let state = Arc::new(app_state);
+    let _managed_access_monitor = buzz_relay::managed_access::spawn_monitor(&state);
     if let Some(tenant) = &deployment_community {
         buzz_relay::handlers::side_effects::fan_out_nip43_membership_list(
             tenant,

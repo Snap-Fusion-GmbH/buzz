@@ -17,6 +17,7 @@
     "test:e2e:smoke": "pnpm build && playwright test --project=smoke"
   },
   "dependencies": {
+    "@buzz/markdown-math": "workspace:*",
     "@fontsource-variable/inter": "^5.2.8",
     "@isomorphic-git/lightning-fs": "^4.6.2",
     "@radix-ui/react-slot": "^1.2.4",

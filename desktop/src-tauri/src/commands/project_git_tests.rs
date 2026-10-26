@@ -2,6 +2,39 @@ use super::super::project_git_file_content::validate_repo_file_path;
 use super::*;
 
 #[test]
+fn unavailable_remote_is_an_error_not_an_authoritative_empty_repository() {
+    let auth = super::super::project_git_exec::build_test_git_auth_config().expect("git config");
+    let root = tempfile::tempdir().expect("fixture directory");
+    let checkout = root.path().join("checkout");
+    let missing = root.path().join("missing.git");
+    run_git(
+        &["init", "--", checkout.to_str().expect("fixture path")],
+        None,
+        &auth,
+    )
+    .expect("init");
+    run_git(
+        &[
+            "remote",
+            "add",
+            "origin",
+            missing.to_str().expect("remote path"),
+        ],
+        Some(&checkout),
+        &auth,
+    )
+    .expect("origin");
+    assert!(compare_local_remote_status(
+        &checkout,
+        missing.to_str().expect("remote path"),
+        Some("main"),
+        None,
+        &auth
+    )
+    .is_err());
+}
+
+#[test]
 fn parse_ls_tree_keeps_paths_after_eager_preview_limit() {
     let repo_dir = tempfile::tempdir().expect("create temporary repository");
     std::fs::create_dir(repo_dir.path().join("src")).expect("create source directory");

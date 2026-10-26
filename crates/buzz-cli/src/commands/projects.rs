@@ -32,6 +32,14 @@ use crate::commands::project_channel::{
 use crate::commands::repos::{build_create_announcement, fetch_own_repo_announcement};
 use crate::error::CliError;
 
+#[cfg(test)]
+#[path = "project_read_tests.rs"]
+mod read_tests;
+
+#[path = "project_reads.rs"]
+mod reads;
+pub use reads::{cmd_get, cmd_list};
+
 async fn cmd_add_channel_draft(
     client: &BuzzClient,
     home_channel: String,
@@ -456,54 +464,6 @@ pub async fn cmd_create(
         crate::links::is_linkable_dtag(slug).then_some(slug),
     )
     .await
-}
-
-/// `buzz projects get`
-pub async fn cmd_get(client: &BuzzClient, slug: &str, owner: Option<&str>) -> Result<(), CliError> {
-    validate_project_slug(slug)?;
-    let resp = match fetch_project(client, slug, owner).await? {
-        Some(event) => serde_json::json!({
-            "event_id": event.id.to_hex(),
-            "pubkey": event.pubkey.to_hex(),
-            "created_at": event.created_at.as_secs(),
-            "kind": event.kind.as_u16(),
-            "tags": event.tags.iter().map(|t| t.as_slice().to_vec()).collect::<Vec<_>>(),
-            "content": event.content,
-        }),
-        None => {
-            let owner_desc = owner.unwrap_or("current identity");
-            return Err(CliError::NotFound(format!(
-                "project {slug:?} not found for {owner_desc}"
-            )));
-        }
-    };
-    println!("{resp}");
-    Ok(())
-}
-
-/// `buzz projects list`
-pub async fn cmd_list(
-    client: &BuzzClient,
-    owner: Option<&str>,
-    limit: Option<u32>,
-) -> Result<(), CliError> {
-    let pubkey = match owner {
-        Some(pk) => {
-            crate::validate::validate_hex64(pk)?;
-            pk.to_string()
-        }
-        None => client.keys().public_key().to_hex(),
-    };
-    let mut filter = serde_json::json!({
-        "kinds": [KIND_PROJECT],
-        "authors": [pubkey],
-    });
-    if let Some(n) = limit {
-        filter["limit"] = serde_json::json!(n);
-    }
-    let resp = client.query(&filter).await?;
-    println!("{resp}");
-    Ok(())
 }
 
 /// `buzz projects add-repo`

@@ -103,6 +103,8 @@ pub(crate) struct CommunityConnectionControl {
     pubkey: Arc<std::sync::OnceLock<[u8; 32]>>,
     /// Owner of an admitted agent; revoking the owner closes this socket.
     owner: Arc<std::sync::OnceLock<[u8; 32]>>,
+    /// Owner proven by this session's NIP-OA credential, not stored profile metadata.
+    delegated_owner: Arc<std::sync::OnceLock<[u8; 32]>>,
     /// Shadow-mode observation of this socket; no enforce path reads it.
     nip_fi_shadow: Arc<std::sync::OnceLock<Arc<crate::nip_fi_shadow_session::ShadowSession>>>,
 }
@@ -117,6 +119,7 @@ impl CommunityConnectionControl {
             terminal_frame_tx: Arc::new(std::sync::Mutex::new(None)),
             pubkey: Arc::default(),
             owner: Arc::default(),
+            delegated_owner: Arc::default(),
             nip_fi_shadow: Arc::default(),
         }
     }
@@ -148,6 +151,17 @@ impl CommunityConnectionControl {
     /// socket without a database lookup.
     pub(crate) fn bind_owner(&self, owner: [u8; 32]) {
         let _ = self.owner.set(owner);
+    }
+
+    /// Record a cryptographically verified session delegation separately from ownership.
+    pub(crate) fn bind_delegated_owner(&self, owner: [u8; 32]) {
+        self.bind_owner(owner);
+        let _ = self.delegated_owner.set(owner);
+    }
+
+    /// Only a credential verified for this session can renew derived access.
+    pub(crate) fn delegated_owner(&self) -> Option<[u8; 32]> {
+        self.delegated_owner.get().copied()
     }
 
     fn matches_revocation(&self, pubkey: &[u8], unowned_only: bool) -> bool {
@@ -267,7 +281,7 @@ impl CommunityConnectionControl {
     /// `authorization_denied` transition, so its client sees the same denial
     /// as any other NIP-FI refusal; an Off-mode socket closes `AccessRevoked`.
     /// Neither overwrites a terminal response already chosen.
-    fn revoke_access(&self) {
+    pub(crate) fn revoke_access(&self) {
         let nip_fi = self
             .proven_identity
             .read()
@@ -770,6 +784,14 @@ impl ConnectionManager {
     pub fn set_admitted_owner(&self, conn_id: Uuid, owner: [u8; 32]) {
         if let Some(entry) = self.connections.get(&conn_id) {
             let _ = entry.admitted_owner.set(owner);
+        }
+    }
+
+    /// Record a verified NIP-OA credential for this root session's lease checks.
+    pub(crate) fn set_delegated_owner(&self, conn_id: Uuid, owner: [u8; 32]) {
+        self.set_admitted_owner(conn_id, owner);
+        if let Some(entry) = self.connections.get(&conn_id) {
+            entry.community_control.bind_delegated_owner(owner);
         }
     }
 
@@ -1930,6 +1952,35 @@ impl AppState {
             + self
                 .community_connections
                 .disconnect_pubkey(community, pubkey, unowned_only)
+    }
+
+    /// Snapshot root and audio principals without retaining registry locks
+    /// across managed-lease database lookups.
+    pub(crate) fn managed_connection_subjects(
+        &self,
+    ) -> Vec<(CommunityId, Vec<u8>, CommunityConnectionControl)> {
+        let mut subjects = Vec::new();
+        for entry in self.conn_manager.connections.iter() {
+            match entry.authenticated_pubkey.read() {
+                Ok(key) => {
+                    if let Some(key) = key.as_ref() {
+                        subjects.push((
+                            entry.community_id,
+                            key.clone(),
+                            entry.community_control.clone(),
+                        ));
+                    }
+                }
+                Err(_) => entry.community_control.revoke_access(),
+            }
+        }
+        for entry in self.community_connections.connections.iter() {
+            let (community, control) = entry.value();
+            if let Some(key) = control.pubkey.get() {
+                subjects.push((*community, key.to_vec(), control.clone()));
+            }
+        }
+        subjects
     }
 
     /// Close every live session of `pubkey` and of the agents it owns, on

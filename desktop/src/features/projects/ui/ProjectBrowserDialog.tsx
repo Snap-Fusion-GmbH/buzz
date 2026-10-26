@@ -11,6 +11,8 @@ import {
   MODAL_SEARCH_SHELL_CLASS,
 } from "@/shared/ui/modalSearchStyles";
 import { CreateProjectFormContent } from "./CreateProjectFormContent";
+import { GitHubImportForm } from "./GitHubImportForm";
+import { GitHubMark } from "./GitHubMark";
 
 function projectSearchText(project: Project) {
   return [
@@ -43,7 +45,9 @@ export function ProjectBrowserDialog({
   projects: readonly Project[];
   selectedProjectAddresses: ReadonlySet<string>;
 }) {
-  const [mode, setMode] = React.useState<"browse" | "create">("browse");
+  const [mode, setMode] = React.useState<"browse" | "create" | "github">(
+    "browse",
+  );
   const [query, setQuery] = React.useState("");
   const inputRef = React.useRef<HTMLInputElement>(null);
   const deferredQuery = React.useDeferredValue(
@@ -81,7 +85,15 @@ export function ProjectBrowserDialog({
       }}
       open={open}
     >
-      {mode === "create" ? (
+      {mode === "github" ? (
+        <GitHubImportForm
+          active={open}
+          isCreating={isCreating}
+          onBack={() => setMode("browse")}
+          onCreate={onCreate}
+          onCreated={() => onOpenChange(false)}
+        />
+      ) : mode === "create" ? (
         <CreateProjectFormContent
           active={open}
           initialName={query.trim()}
@@ -89,6 +101,7 @@ export function ProjectBrowserDialog({
           onBack={() => setMode("browse")}
           onCreate={onCreate}
           onCreated={() => onOpenChange(false)}
+          onChooseGitHub={() => setMode("github")}
         />
       ) : (
         <ChooserDialogContent
@@ -135,6 +148,16 @@ export function ProjectBrowserDialog({
               </span>
             </Button>
           ) : null}
+          <Button
+            className="w-full justify-start gap-3"
+            data-testid="project-browser-github"
+            onClick={() => setMode("github")}
+            type="button"
+            variant="ghost"
+          >
+            <GitHubMark aria-hidden="true" className="h-4 w-4" />
+            Add from GitHub
+          </Button>
 
           <div className="border-t border-border/60 pt-2">
             {visibleProjects.length > 0 ? (

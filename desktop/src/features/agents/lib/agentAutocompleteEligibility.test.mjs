@@ -231,6 +231,76 @@ test("getMentionableAgentPubkeys: scopes channel composers and fails closed with
   );
 });
 
+test("shared nonmembers can be selected for Invite, not published before joining", () => {
+  for (const ownerPubkey of [null, OTHER_OWNER_PUBKEY]) {
+    for (const respondTo of ["anyone", "allowlist"]) {
+      const options = {
+        currentPubkey: CURRENT_PUBKEY,
+        managedAgentPubkeys: [],
+        sharedChannelIds: new Set(["general", "target"]),
+        eligibilityScope: { type: "channel", channelId: "target" },
+        relayAgents: [
+          {
+            pubkey: PUB_B,
+            ownerPubkey,
+            respondTo,
+            respondToAllowlist: [CURRENT_PUBKEY],
+            channelIds: ["general"],
+          },
+        ],
+      };
+      assert.deepEqual(
+        getMentionableAgentPubkeys({ ...options, phase: "prepare" }),
+        new Set([PUB_B]),
+      );
+      assert.deepEqual(
+        getMentionableAgentPubkeys({ ...options, phase: "publish" }),
+        new Set(),
+      );
+      assert.deepEqual(
+        getMentionableAgentPubkeys({
+          ...options,
+          eligibilityScope: { type: "owned", channelId: "dm" },
+          phase: "prepare",
+        }),
+        new Set(),
+      );
+    }
+  }
+});
+
+test("Invite preparation does not bypass policy or shared-channel evidence", () => {
+  for (const agent of [
+    {
+      respondTo: "owner-only",
+      channelIds: ["general"],
+      respondToAllowlist: [],
+    },
+    { respondTo: null, channelIds: ["general"], respondToAllowlist: [] },
+    { respondTo: "nobody", channelIds: ["general"], respondToAllowlist: [] },
+    {
+      respondTo: "anyone",
+      channelIds: ["inaccessible"],
+      respondToAllowlist: [],
+    },
+    { respondTo: "allowlist", channelIds: ["general"], respondToAllowlist: [] },
+  ]) {
+    assert.deepEqual(
+      getMentionableAgentPubkeys({
+        phase: "prepare",
+        currentPubkey: CURRENT_PUBKEY,
+        managedAgentPubkeys: [],
+        sharedChannelIds: new Set(["general", "target"]),
+        eligibilityScope: { type: "channel", channelId: "target" },
+        relayAgents: [
+          { pubkey: PUB_B, ownerPubkey: OTHER_OWNER_PUBKEY, ...agent },
+        ],
+      }),
+      new Set(),
+    );
+  }
+});
+
 test("autocomplete helper extraction preserves safe filtering and labels", () => {
   assert.equal(isAgentMentionChannelType("stream"), true);
   assert.equal(isAgentMentionChannelType("forum"), true);

@@ -60,6 +60,11 @@ function canonicalOrigin(url: string): string | null {
  */
 let cacheGeneration = 0;
 
+/** Identify the current workspace session, including switch-away-and-back resets. */
+export function getRelayOriginGeneration(): number {
+  return cacheGeneration;
+}
+
 /** `useSyncExternalStore` listeners for relay-origin changes. */
 const relayOriginListeners = new Set<() => void>();
 

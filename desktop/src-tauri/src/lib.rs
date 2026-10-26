@@ -10,6 +10,9 @@ mod deep_link;
 mod egress_guard;
 mod event_sync;
 mod events;
+mod github_access;
+#[doc(hidden)]
+pub use github_access::print_github_organization_probe_if_requested;
 #[cfg_attr(not(test), allow(dead_code))]
 mod hpke_key_backup;
 mod huddle;
@@ -21,6 +24,8 @@ mod linux_media;
 #[cfg(target_os = "macos")]
 mod macos_notifications;
 mod managed_agents;
+mod managed_workspace;
+mod managed_workspace_config;
 mod media_proxy;
 #[cfg(feature = "mesh-llm")]
 mod mesh_llm;
@@ -230,6 +235,7 @@ pub fn run() {
         .manage(PendingEntityDeepLinks::default())
         .manage(BuilderlabSession::default())
         .manage(BuilderlabLogin::default())
+        .manage(managed_workspace::ManagedWorkspaceState::default())
         .manage(commands::pairing::PairingHandle::new())
         .manage(terminal_runtime::TerminalSessions::default())
         .manage(archive::sync::ArchiveSyncState::default())
@@ -305,6 +311,14 @@ pub fn run() {
                 || state
                     .keyring_locked
                     .load(std::sync::atomic::Ordering::Acquire);
+
+            // Remove the agent instances older builds provisioned for the
+            // retired Welcome Team. This runs after identity resolution so the
+            // records can be deleted with their keys and tombstones durably
+            // queued, and before agent restore so they cannot be spawned.
+            if !recovery_mode {
+                migration::retire_welcome_agents(&app_handle);
+            }
 
             // Backfill the pinned persona snapshot for any pre-existing agent
             // that predates the record-authoritative-spawn cutover (persona_id
@@ -544,6 +558,9 @@ pub fn run() {
             take_pending_entity_deep_link,
             acknowledge_pending_entity_deep_link,
             start_builderlab_login,
+            managed_workspace::managed_workspace_status,
+            managed_workspace::managed_workspace_login,
+            managed_workspace::cancel_managed_workspace_login,
             cancel_builderlab_login,
             get_builderlab_auth,
             clear_builderlab_auth,
@@ -628,7 +645,7 @@ pub fn run() {
             get_channels,
             get_open_channel_directory,
             create_channel,
-            ensure_starter_channels,
+            retire_welcome_channels,
             open_dm,
             get_bestie_assignment,
             assign_bestie,
@@ -651,6 +668,11 @@ pub fn run() {
             get_canvas,
             get_canvas_history,
             set_canvas,
+            get_channel_meetings,
+            get_channel_meeting_support,
+            preview_meeting_definition,
+            save_channel_meeting,
+            change_channel_meeting,
             get_feed,
             search_messages,
             send_channel_message,
@@ -723,6 +745,11 @@ pub fn run() {
             get_agent_models,
             discover_agent_models,
             agent_access_owner_only,
+            get_github_access_status,
+            connect_github_account,
+            get_github_repository_state,
+            list_github_repositories,
+            get_github_repository,
             get_agent_config_surface,
             get_runtime_file_config,
             get_baked_build_env_keys,
@@ -805,6 +832,14 @@ pub fn run() {
             leave_huddle,
             end_huddle,
             get_huddle_state,
+            huddle::screen::list_huddle_screen_sources,
+            huddle::screen::start_huddle_screen_share,
+            huddle::screen::stop_huddle_screen_share,
+            huddle::screen::read_huddle_screen_video_chunk,
+            huddle::camera::start_huddle_camera,
+            huddle::camera::stop_huddle_camera,
+            huddle::camera::push_huddle_camera_frame,
+            huddle::camera::read_huddle_camera_video_chunk,
             close_huddle_companion,
             open_huddle_window,
             push_audio_pcm,

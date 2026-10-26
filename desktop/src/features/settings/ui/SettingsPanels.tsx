@@ -8,6 +8,7 @@ import {
   Cpu,
   Download,
   FlaskConical,
+  GitBranch,
   Keyboard,
   LayoutTemplate,
   MessagesSquare,
@@ -80,6 +81,7 @@ import { ProfileSettingsCard } from "./ProfileSettingsCard";
 import { UpdateChecker } from "../UpdateChecker";
 import { SettingsSectionHeader } from "./SettingsSectionHeader";
 import { VoiceSettingsCard } from "./VoiceSettingsCard";
+import { GitHubSettingsPanel } from "./GitHubSettingsPanel";
 
 export type SettingsSection =
   | "profile"
@@ -87,6 +89,7 @@ export type SettingsSection =
   | "voice"
   | "experimental"
   | "agents"
+  | "github"
   | "channel-templates"
   | "compute"
   | "appearance"
@@ -107,6 +110,7 @@ const SETTINGS_SECTION_VALUES: readonly SettingsSection[] = [
   "voice",
   "experimental",
   "agents",
+  "github",
   "channel-templates",
   "compute",
   "appearance",
@@ -151,6 +155,7 @@ export type SettingsPanelProps = {
 };
 
 export const settingsSections: SettingsSectionDescriptor[] = [
+  { value: "github", label: "GitHub", icon: GitBranch },
   {
     value: "appearance",
     label: "Appearance",
@@ -834,6 +839,8 @@ export function renderSettingsSection(
       return <ExperimentalFeaturesCard />;
     case "agents":
       return <AgentsSettingsPanel />;
+    case "github":
+      return <GitHubSettingsPanel />;
     case "channel-templates":
       return <ChannelTemplatesSettingsCard />;
     case "compute":

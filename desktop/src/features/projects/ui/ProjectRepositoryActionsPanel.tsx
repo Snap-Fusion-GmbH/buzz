@@ -181,7 +181,8 @@ export function ProjectRepositoryActionsPanel({
   const fetchAction =
     branchScoped &&
     (sourceControls.source === "local" ||
-      sourceControls.remoteKind !== "external")
+      sourceControls.remoteKind !== "external" ||
+      sourceControls.supportsGitSync)
       ? sourceControls.onFetch
       : undefined;
   const pullAction =

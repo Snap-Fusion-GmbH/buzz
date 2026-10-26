@@ -52,6 +52,7 @@ import {
   channelMembersQueryKey,
 } from "@/features/channels/rosterFreshness";
 import { dmVisibilityQueryKeyFor } from "@/features/channels/useHiddenDmIds";
+import { recoverManagedRelayMembership } from "@/shared/api/managedRelayRecovery";
 
 export const channelsQueryKey = ["channels"] as const;
 /** Keeps focused polling at the established one-minute cadence. */
@@ -328,6 +329,7 @@ export type RefreshChannelsQueryOptions = {
   ownerPubkey: string | null;
   fetchChannels?: (knownHash: string | null) => Promise<GetChannelsPayload>;
   persistSnapshot?: typeof writeChannelSnapshot;
+  signal?: AbortSignal;
 };
 
 /**
@@ -342,7 +344,31 @@ export async function refreshChannelsQuery({
   ownerPubkey,
   fetchChannels = getChannels,
   persistSnapshot = writeChannelSnapshot,
+  signal,
 }: RefreshChannelsQueryOptions): Promise<Channel[]> {
+  let recoveryAttempted = false;
+  const fetchWithRecovery = async (hash: string | null) => {
+    signal?.throwIfAborted();
+    try {
+      return await fetchChannels(hash);
+    } catch (error) {
+      if (
+        recoveryAttempted ||
+        !(error instanceof Error) ||
+        error.message !==
+          "relay returned 403 Forbidden: You must be a relay member to access this relay"
+      ) {
+        throw error;
+      }
+      recoveryAttempted = true;
+      if (
+        !(await recoverManagedRelayMembership(relayUrl, ownerPubkey, signal))
+      ) {
+        throw error;
+      }
+      return fetchChannels(hash);
+    }
+  };
   // Revalidation uses only an authoritative list/hash pair. The displayed
   // channels cache is intentionally ignored because successful mutations
   // patch it before the relay's list/hash has necessarily caught up.
@@ -353,7 +379,8 @@ export async function refreshChannelsQuery({
 
   const channelsAtRequestStart =
     queryClient.getQueryData<Channel[]>(channelsQueryKey);
-  const payload = await fetchChannels(knownHash);
+  const payload = await fetchWithRecovery(knownHash);
+  signal?.throwIfAborted();
 
   // A not-modified response is usable only when it echoes the exact hash
   // that described the available list. Any other hash/list pairing fails
@@ -369,7 +396,8 @@ export async function refreshChannelsQuery({
   if (!pairChannels) {
     // Missing cache or a mismatched not-modified response: discard the hash
     // and fetch a complete authoritative list before updating persistence.
-    const full = await fetchChannels(null);
+    const full = await fetchWithRecovery(null);
+    signal?.throwIfAborted();
     const authoritativeChannels = sortChannels(
       applyLastMessages(
         requireFullChannelList(full.channels),
@@ -467,12 +495,13 @@ export function useChannelsQuery(options?: { enabled?: boolean }) {
       relayUrl !== null &&
       canFetchChannelsForIdentity(ownerPubkey, identityQuery.isError),
     queryKey: channelsQueryKey,
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       refreshChannelsQuery({
         queryClient,
         initialSnapshotPair,
         relayUrl,
         ownerPubkey,
+        signal,
       }),
     // Paint the complete persisted list immediately. `initialDataUpdatedAt: 0`
     // deliberately keeps it stale so every boot still validates against the

@@ -204,7 +204,7 @@ Future<void> finishHostedStarterSetup(
           nsec: config.nsec,
         ),
       )
-      .ensureStarterChannels();
+      .retireWelcomeChannels();
   checkCurrent();
   await ref.read(communityTransitionProvider).runExclusive(() async {
     checkCurrent();

@@ -184,7 +184,7 @@ fn upload_project_files_blocking(
             Some(&branch),
             None,
             auth,
-        );
+        )?;
         if !sync.can_push
             && sync.push_block_reason.as_deref() == Some("Local branch is already pushed.")
         {
@@ -450,7 +450,7 @@ mod tests {
     fn selected_files_are_committed_and_pushed_to_an_empty_repository() {
         let fixture = fixture();
         clone(&fixture);
-        let commit = upload(&fixture, &[fixture.source.clone()]).expect("upload");
+        let commit = upload(&fixture, std::slice::from_ref(&fixture.source)).expect("upload");
         let auth = build_test_git_auth_config().expect("git auth");
         let remote_commit =
             run_git(&["rev-parse", "main"], Some(&fixture.remote), &auth).expect("remote commit");
@@ -466,9 +466,9 @@ mod tests {
     fn an_existing_destination_leaves_the_checkout_untouched() {
         let fixture = fixture();
         clone(&fixture);
-        upload(&fixture, &[fixture.source.clone()]).expect("first upload");
+        upload(&fixture, std::slice::from_ref(&fixture.source)).expect("first upload");
         std::fs::write(&fixture.source, "replacement\n").expect("change source");
-        let error = upload(&fixture, &[fixture.source.clone()]).expect_err("conflict");
+        let error = upload(&fixture, std::slice::from_ref(&fixture.source)).expect_err("conflict");
         assert!(error.contains("already exists"));
         assert!(status(&fixture.checkout).is_empty());
         assert_eq!(
@@ -483,7 +483,8 @@ mod tests {
         clone(&fixture);
         std::fs::write(fixture.checkout.join("work-in-progress.txt"), "keep me\n")
             .expect("local work");
-        let error = upload(&fixture, &[fixture.source.clone()]).expect_err("dirty checkout");
+        let error =
+            upload(&fixture, std::slice::from_ref(&fixture.source)).expect_err("dirty checkout");
         assert!(error.contains("uncommitted changes"));
         assert!(!fixture.checkout.join("source.txt").exists());
         assert_eq!(status(&fixture.checkout), "?? work-in-progress.txt\n");
@@ -511,7 +512,7 @@ mod tests {
             "checkout",
             original_remote.to_str().expect("path"),
             Some("main"),
-            &[fixture.source.clone()],
+            std::slice::from_ref(&fixture.source),
             &"a".repeat(64),
             &auth,
         )
@@ -529,7 +530,8 @@ mod tests {
             &auth,
         )
         .expect("restore remote");
-        let retried_commit = upload(&fixture, &[fixture.source.clone()]).expect("retry");
+        let retried_commit =
+            upload(&fixture, std::slice::from_ref(&fixture.source)).expect("retry");
         assert_eq!(retried_commit, local_commit);
         assert_eq!(
             run_git(&["rev-parse", "main"], Some(&fixture.remote), &auth)
@@ -543,9 +545,9 @@ mod tests {
     fn selecting_an_already_pushed_file_does_not_create_another_commit() {
         let fixture = fixture();
         clone(&fixture);
-        let commit = upload(&fixture, &[fixture.source.clone()]).expect("upload");
+        let commit = upload(&fixture, std::slice::from_ref(&fixture.source)).expect("upload");
         assert_eq!(
-            upload(&fixture, &[fixture.source.clone()]).expect("idempotent retry"),
+            upload(&fixture, std::slice::from_ref(&fixture.source)).expect("idempotent retry"),
             commit
         );
         let auth = build_test_git_auth_config().expect("git auth");
@@ -594,7 +596,7 @@ mod tests {
             "checkout",
             fixture.remote.to_str().expect("remote path"),
             Some("main"),
-            &[fixture.source.clone()],
+            std::slice::from_ref(&fixture.source),
             &"a".repeat(64),
             &auth,
         )

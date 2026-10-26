@@ -192,8 +192,9 @@ fn test_editing_a_member_definition_changes_the_team_bytes() {
 
 /// Real built-in record (avatar cleared — live built-ins ship ~170 KiB inline PNG).
 fn builtin_record(id: &str) -> AgentDefinition {
-    let mut record = crate::managed_agents::built_in_persona_definition(id, "2026-07-30T00:00:00Z")
-        .unwrap_or_else(|| panic!("'{id}' is not a built-in persona"));
+    let mut record =
+        crate::managed_agents::retired_builtin_persona_definition(id, "2026-07-30T00:00:00Z")
+            .unwrap_or_else(|| panic!("'{id}' is not a built-in persona"));
     record.avatar_url = None;
     record
 }
@@ -862,9 +863,11 @@ run_fixture_table!(
 #[test]
 fn test_real_builtin_without_avatar_mutation_projects_successfully() {
     // A real built-in (fizz) has a ~170 KiB oversized avatar that is stripped in member_projection.
-    let builtin =
-        crate::managed_agents::built_in_persona_definition("builtin:fizz", "2026-07-30T00:00:00Z")
-            .expect("builtin:fizz must exist");
+    let builtin = crate::managed_agents::retired_builtin_persona_definition(
+        "builtin:fizz",
+        "2026-07-30T00:00:00Z",
+    )
+    .expect("builtin:fizz must exist");
     let has_large_avatar = builtin
         .avatar_url
         .as_deref()

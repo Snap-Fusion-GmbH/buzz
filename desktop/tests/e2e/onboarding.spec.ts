@@ -8,12 +8,8 @@ import {
   TEST_IDENTITIES,
 } from "../helpers/bridge";
 import { expectEmojiMartStylesInstalled } from "../helpers/css";
-import {
-  invokeMockCommand,
-  publishWelcomeTeamPresence,
-  waitForWelcomeTeam,
-} from "../helpers/welcomeTeam";
 import { installFakeCamera } from "../helpers/fakeCamera";
+import { invokeMockCommand } from "../helpers/mockCommands";
 import {
   E2E_IDENTITY_OVERRIDE_STORAGE_KEY,
   seedActiveIdentity,
@@ -183,390 +179,6 @@ async function expectHomeView(page: Page) {
   await expect(page.getByTestId("home-inbox-list")).toBeVisible();
 }
 
-async function expectWiderThanTall(locator: Locator) {
-  const box = await locator.boundingBox();
-  if (!box) {
-    throw new Error("Could not measure welcome intro action card");
-  }
-
-  expect(box.width).toBeGreaterThan(box.height);
-}
-
-async function expectIntroActionIconStackedAboveTitle(
-  action: Locator,
-  title: string,
-) {
-  const iconBox = await action.locator("svg").first().boundingBox();
-  const titleBox = await action.getByText(title, { exact: true }).boundingBox();
-  if (!iconBox || !titleBox) {
-    throw new Error("Could not measure welcome intro action content");
-  }
-
-  expect(titleBox.y).toBeGreaterThan(iconBox.y + iconBox.height);
-}
-
-async function expectWelcomeComposerBannerLayout(page: Page) {
-  const banner = page.getByTestId("welcome-composer-guide-banner");
-  const personaMention = page.getByTestId("welcome-composer-persona-mention");
-  const composer = page.getByTestId("message-composer");
-  const bannerBox = await banner.boundingBox();
-  const personaMentionBox = await personaMention.boundingBox();
-  const composerBox = await composer.boundingBox();
-  const dockBackdropBox = await page
-    .getByTestId("composer-dock-backdrop")
-    .locator("div")
-    .boundingBox();
-  const guidanceLayer = page.getByTestId("welcome-composer-guidance-layer");
-  const guidanceLayerBox = await guidanceLayer.boundingBox();
-  const guidanceBackdrop = page.getByTestId(
-    "welcome-composer-guidance-backdrop",
-  );
-  const guidanceBackdropBox = await guidanceBackdrop.boundingBox();
-
-  if (
-    !bannerBox ||
-    !personaMentionBox ||
-    !composerBox ||
-    !dockBackdropBox ||
-    !guidanceLayerBox ||
-    !guidanceBackdropBox
-  ) {
-    throw new Error("Could not measure welcome composer banner layout");
-  }
-
-  expect(
-    await composer.getByTestId("welcome-composer-guide-banner").count(),
-  ).toBe(0);
-  expect(bannerBox.y).toBeLessThan(composerBox.y);
-  // Banner is in normal flow above the composer, no overlap.
-  expect(bannerBox.y + bannerBox.height).toBeLessThanOrEqual(composerBox.y);
-  // The dock backdrop is absolute inset-y-0 inside composer-dock, which now
-  // contains the guidance layer + composer in flow, so its top aligns with the
-  // guidance layer top (not the composer top).
-  expect(Math.abs(dockBackdropBox.y - guidanceLayerBox.y)).toBeLessThanOrEqual(
-    1,
-  );
-  expect(guidanceBackdropBox.y).toBeLessThanOrEqual(bannerBox.y);
-  // The guidance backdrop extends bottom-3 (12px) short of the banner's bottom,
-  // visually connecting up to the composer.
-  expect(guidanceBackdropBox.y + guidanceBackdropBox.height).toBeLessThan(
-    composerBox.y,
-  );
-  expect(
-    await page
-      .getByTestId("channel-composer-overlay")
-      .getByTestId("welcome-composer-guidance-layer")
-      .count(),
-  ).toBe(1);
-  expect(
-    await page
-      .getByTestId("composer-dock-backdrop")
-      .getByTestId("welcome-composer-guidance-layer")
-      .count(),
-  ).toBe(0);
-
-  const radii = await banner.evaluate((element) => {
-    const styles = window.getComputedStyle(element);
-    return {
-      backdropFilter: styles.backdropFilter,
-      backgroundColor: styles.backgroundColor,
-      bottomLeft: styles.borderBottomLeftRadius,
-      bottomRight: styles.borderBottomRightRadius,
-      filter: styles.filter,
-      zIndex: styles.zIndex,
-      topLeft: styles.borderTopLeftRadius,
-      topRight: styles.borderTopRightRadius,
-      transform: styles.transform,
-      willChange: styles.willChange,
-    };
-  });
-  const composerBackgroundColor = await composer.evaluate(
-    (element) => window.getComputedStyle(element).backgroundColor,
-  );
-  const dockBackdropFilter = await page
-    .getByTestId("composer-dock-backdrop")
-    .locator("div")
-    .evaluate((element) => window.getComputedStyle(element).backdropFilter);
-  const guidanceBackdropFilter = await guidanceBackdrop.evaluate(
-    (element) => window.getComputedStyle(element).backdropFilter,
-  );
-
-  expect(radii.topLeft).toBe(radii.topRight);
-  expect(radii.bottomLeft).toBe("0px");
-  expect(radii.bottomRight).toBe("0px");
-  expect(radii.backdropFilter).toBe("none");
-  expect(radii.backgroundColor).not.toBe(composerBackgroundColor);
-  expect(dockBackdropFilter).not.toBe("none");
-  expect(guidanceBackdropFilter).toBe(dockBackdropFilter);
-  expect(radii.filter).toBe("none");
-  expect(radii.transform).toBe("none");
-  expect(radii.willChange).toBe("auto");
-  expect(radii.zIndex).toBe("1");
-  expect(personaMentionBox.width).toBeGreaterThan(0);
-}
-
-async function expectWelcomePersonaMention(page: Page) {
-  const banner = page.getByTestId("welcome-composer-guide-banner");
-  const personaMention = page.getByTestId("welcome-composer-persona-mention");
-  await expect(personaMention).toBeVisible();
-  await expect(personaMention).toHaveAttribute("data-persona-options", "Fizz");
-  await expect(personaMention).toHaveAttribute("data-active-persona", "Fizz");
-  await expect(personaMention).toHaveAttribute(
-    "data-animation-target",
-    "per-character",
-  );
-
-  const activePersona = await personaMention.getAttribute(
-    "data-active-persona",
-  );
-  expect(activePersona).not.toBeNull();
-  await expect(personaMention).toContainText(`@${activePersona}`);
-  expect(
-    await personaMention
-      .getByTestId("welcome-composer-persona-character")
-      .count(),
-  ).toBeGreaterThanOrEqual(4);
-  expect(
-    await personaMention
-      .getByTestId("welcome-composer-persona-character")
-      .first()
-      .evaluate((element) => window.getComputedStyle(element).filter),
-  ).toBe("none");
-
-  const transition = await personaMention.evaluate((element) => {
-    const styles = window.getComputedStyle(element);
-    const durationMs = Number(
-      element.getAttribute("data-width-animation-duration-ms"),
-    );
-    return {
-      duration: styles.transitionDuration,
-      durationMs,
-      property: styles.transitionProperty,
-    };
-  });
-  expect(transition.durationMs).toBeGreaterThanOrEqual(700);
-  expect(transition.durationMs).toBeLessThanOrEqual(740);
-  expect(Math.round(Number.parseFloat(transition.duration) * 1000)).toBe(
-    transition.durationMs,
-  );
-  expect(transition.property).toContain("width");
-
-  const alignment = await personaMention.evaluate((element) => {
-    const mentionStyles = window.getComputedStyle(element);
-    const bannerStyles = window.getComputedStyle(
-      element.closest('[data-testid="welcome-composer-guide-banner"]') ??
-        element,
-    );
-    return {
-      display: mentionStyles.display,
-      lineHeightMatchesBanner:
-        mentionStyles.lineHeight === bannerStyles.lineHeight,
-      verticalAlign: mentionStyles.verticalAlign,
-    };
-  });
-  expect(alignment.display).toBe("inline-block");
-  expect(alignment.verticalAlign).toBe("baseline");
-  expect(alignment.lineHeightMatchesBanner).toBe(true);
-  await expect(banner).toContainText("Mention");
-}
-
-async function expectPrivateWelcomeLanding(page: Page) {
-  await expect(page).toHaveURL(/#\/channels\/[^/?#]+$/);
-  await expect(page.getByTestId("channel-Welcome")).toBeVisible();
-  await expect(page.getByTestId("chat-title")).toContainText("Welcome");
-}
-
-async function expectWelcomeView(page: Page) {
-  await expectPrivateWelcomeLanding(page);
-  await expect(page.getByTestId("channel-general")).toBeVisible();
-  await expect(page.getByTestId("channel-welcome-everyone")).toBeVisible();
-  await expect(page.getByTestId("channel-ephemeral-Welcome")).toHaveCount(0);
-  await expect(page.getByTestId("chat-ephemeral-badge")).toHaveCount(0);
-  await expect(page.getByTestId("message-unread-pill")).toHaveCount(0);
-  await expect(page.getByTestId("message-channel-intro")).toBeVisible();
-  await expect(page.getByTestId("message-channel-intro")).toContainText(
-    "private welcome channel",
-  );
-  await expect(
-    page.getByTestId("message-channel-intro").getByRole("button"),
-  ).toHaveText(["Browse channels", "Create a channel", "Create an agent"]);
-  await expect(
-    page.getByTestId("welcome-intro-action-browse-channels"),
-  ).toBeVisible();
-  await expectWiderThanTall(
-    page.getByTestId("welcome-intro-action-browse-channels"),
-  );
-  await expectIntroActionIconStackedAboveTitle(
-    page.getByTestId("welcome-intro-action-browse-channels"),
-    "Browse channels",
-  );
-  await page.getByTestId("welcome-intro-action-browse-channels").click();
-  await expect(page.getByTestId("channel-browser-dialog")).toBeVisible();
-  await expect(page.getByTestId("channel-browser-search")).toBeFocused();
-  await expect(page.getByRole("tab", { name: "All channels" })).toHaveAttribute(
-    "data-state",
-    "active",
-  );
-  await page.keyboard.press("Escape");
-  await expect(page.getByTestId("channel-browser-dialog")).toHaveCount(0);
-  await expect(
-    page.getByTestId("welcome-intro-action-create-channel"),
-  ).toBeVisible();
-  await expectWiderThanTall(
-    page.getByTestId("welcome-intro-action-create-channel"),
-  );
-  await expectIntroActionIconStackedAboveTitle(
-    page.getByTestId("welcome-intro-action-create-channel"),
-    "Create a channel",
-  );
-  await expect(
-    page
-      .getByTestId("welcome-intro-action-create-channel")
-      .getByText("Create a channel", { exact: true }),
-  ).toHaveCSS("white-space", "normal");
-  await expect(
-    page.getByTestId("welcome-intro-action-create-agent"),
-  ).toBeVisible();
-  await expectWiderThanTall(
-    page.getByTestId("welcome-intro-action-create-agent"),
-  );
-  await expectIntroActionIconStackedAboveTitle(
-    page.getByTestId("welcome-intro-action-create-agent"),
-    "Create an agent",
-  );
-  await expect(page.getByTestId("message-composer")).toBeVisible();
-  // Measure the empty-channel intro before presence releases the live kickoff.
-  // Its message arrival can remount the timeline while bounding boxes are read.
-  await publishWelcomeTeamPresence(page);
-  await expect(page.getByTestId("welcome-composer-guide-banner")).toBeVisible();
-  await expect(page.getByTestId("welcome-composer-guide-banner")).toContainText(
-    "Mention",
-  );
-  await expect(page.getByTestId("welcome-composer-guide-banner")).toContainText(
-    "whenever you want their help.",
-  );
-  await expectWelcomePersonaMention(page);
-  await expectWelcomeComposerBannerLayout(page);
-}
-
-async function expectWelcomeComposerBannerCompletesAfterPersonaMention(
-  page: Page,
-) {
-  const banner = page.getByTestId("welcome-composer-guide-banner");
-  const channelIntro = page.getByTestId("message-channel-intro");
-  const composer = page.getByTestId("message-composer");
-  const initialComposerBox = await composer.boundingBox();
-  if (!initialComposerBox) {
-    throw new Error("Could not measure the Welcome composer");
-  }
-
-  // The fixture has a seeded Fizz and this new member's starter Fizz. A
-  // manually typed name cannot choose between them or complete onboarding.
-  const input = page.getByTestId("message-input");
-  const content = "Thanks @Fizz";
-  const sentRecipients = () =>
-    page.evaluate(
-      (content) =>
-        (window.__BUZZ_E2E_SIGNED_EVENTS__ ?? [])
-          .filter((event) => event.content.trim() === content)
-          .map((event) =>
-            event.tags.filter((tag) => tag[0] === "p").map((tag) => tag[1]),
-          ),
-      content,
-    );
-  await input.fill(content);
-  await input.press("Escape");
-  await page.getByTestId("send-message").click();
-  await expect(
-    page.getByText("The mention @Fizz is ambiguous.", { exact: false }),
-  ).toBeVisible();
-  await expect(input).toHaveText(content);
-  await expect(banner).toHaveAttribute("data-state", "prompt");
-  expect(await sentRecipients()).toEqual([]);
-
-  const agents = await invokeMockCommand<
-    Array<{ pubkey: string; persona_id: string | null; status: string }>
-  >(page, "list_managed_agents");
-  const sameNameAgents = agents.filter(
-    (agent) => agent.persona_id === "builtin:fizz",
-  );
-  expect(sameNameAgents).toHaveLength(2);
-  // Onboarding starts the new member's starter; the pre-existing mock stays
-  // stopped. This identifies the fixture key, not a production routing rule.
-  const fizz = sameNameAgents.filter((agent) => agent.status === "running");
-  expect(fizz).toHaveLength(1);
-  // Make selection intent explicit; do not remove the colliding fixture or
-  // relax extraction. The resulting event must tag only our starter identity.
-  await input.fill("");
-  await input.fill(content);
-  await page.getByTestId(`mention-suggestion-${fizz[0].pubkey}`).click();
-  await page.getByTestId("send-message").click();
-  await expect.poll(sentRecipients).toEqual([[fizz[0].pubkey]]);
-
-  await expect(banner).toHaveAttribute("data-state", "complete");
-  await expect(banner).toHaveAttribute("data-tone", "success");
-  await expect(
-    banner.getByTestId("welcome-composer-complete-icon"),
-  ).toBeVisible();
-  await expect(
-    banner.locator('[data-animation-target="success-icon"]'),
-  ).toBeVisible();
-  await expect(
-    banner.locator('[data-animation-target="success-copy"]'),
-  ).toBeVisible();
-  await expect(banner).toContainText("Nice work.");
-  await expect(banner).not.toContainText("Try mentioning");
-  await expect(channelIntro).toBeVisible();
-  const completeComposerBox = await composer.boundingBox();
-  expect(completeComposerBox).not.toBeNull();
-  expect(
-    Math.abs((completeComposerBox?.y ?? 0) - initialComposerBox.y),
-  ).toBeLessThanOrEqual(1);
-  await expect(banner).toHaveCount(0, { timeout: 6_000 });
-  const hiddenComposerBox = await composer.boundingBox();
-  expect(hiddenComposerBox).not.toBeNull();
-  expect(
-    Math.abs((hiddenComposerBox?.y ?? 0) - initialComposerBox.y),
-  ).toBeLessThanOrEqual(1);
-}
-
-async function getMockChannels(page: Page) {
-  return page.evaluate(async () => {
-    const bridgeWindow = window as Window & {
-      __BUZZ_E2E_INVOKE_MOCK_COMMAND__?: (
-        command: string,
-        payload?: Record<string, unknown>,
-      ) => Promise<unknown>;
-      __TAURI_INTERNALS__?: {
-        invoke?: (
-          command: string,
-          payload?: Record<string, unknown>,
-        ) => Promise<unknown>;
-      };
-    };
-    const invoke =
-      bridgeWindow.__BUZZ_E2E_INVOKE_MOCK_COMMAND__ ??
-      bridgeWindow.__TAURI_INTERNALS__?.invoke;
-
-    if (!invoke) {
-      throw new Error("Mock invoke bridge is unavailable.");
-    }
-
-    const payload = (await invoke("get_channels")) as {
-      channels: Array<{
-        id: string;
-        name: string;
-        channel_type: string;
-        visibility: "open" | "private";
-        member_count: number;
-        is_member: boolean;
-        ttl_seconds: number | null;
-      }> | null;
-    };
-    return payload.channels ?? [];
-  });
-}
-
 async function seedCurrentAvatar(page: Page, avatarUrl: string) {
   await page.waitForFunction(() => {
     const bridgeWindow = window as Window & {
@@ -582,108 +194,6 @@ async function seedCurrentAvatar(page: Page, avatarUrl: string) {
   await page.evaluate(() => {
     window.__BUZZ_E2E_COMMAND_PAYLOADS__ = [];
   });
-}
-
-async function getWelcomeChannelId(page: Page) {
-  const channels = await getMockChannels(page);
-  return (
-    channels.find(
-      (channel) =>
-        channel.name === "Welcome" && channel.visibility === "private",
-    )?.id ?? null
-  );
-}
-
-async function expectStarterChannels(page: Page) {
-  await expect
-    .poll(async () => {
-      const channels = await getMockChannels(page);
-      return ["general", "welcome-everyone"].map((name) => {
-        const channel = channels.find(
-          (candidate) =>
-            candidate.name === name && candidate.visibility === "open",
-        );
-        if (!channel) {
-          return null;
-        }
-        return {
-          channelType: channel.channel_type,
-          isMember: channel.is_member,
-          memberCountAtLeastOne: channel.member_count >= 1,
-          ttlSeconds: channel.ttl_seconds,
-          visibility: channel.visibility,
-        };
-      });
-    })
-    .toEqual([
-      {
-        channelType: "stream",
-        isMember: true,
-        memberCountAtLeastOne: true,
-        ttlSeconds: null,
-        visibility: "open",
-      },
-      {
-        channelType: "stream",
-        isMember: true,
-        memberCountAtLeastOne: true,
-        ttlSeconds: null,
-        visibility: "open",
-      },
-    ]);
-}
-
-async function expectWelcomeGuideIntro(
-  page: Page,
-  { expectVisible = true }: { expectVisible?: boolean } = {},
-) {
-  await expect
-    .poll(async () => {
-      const channelId = await getWelcomeChannelId(page);
-      if (!channelId) {
-        return null;
-      }
-
-      const [members, agents] = await Promise.all([
-        invokeMockCommand<{
-          members: Array<{ pubkey: string; role: string; is_agent: boolean }>;
-        }>(page, "get_channel_members", { channelId }),
-        invokeMockCommand<
-          Array<{ pubkey: string; name: string; persona_id: string | null }>
-        >(page, "list_managed_agents"),
-      ]);
-      const fizz = agents.find(
-        (agent) => agent.name === "Fizz" && agent.persona_id === "builtin:fizz",
-      );
-      const fizzMember = fizz
-        ? members.members.find((member) => member.pubkey === fizz.pubkey)
-        : null;
-      const profileAvatarUrl = fizz
-        ? (
-            await invokeMockCommand<{
-              profiles: Record<string, { avatar_url: string | null }>;
-            }>(page, "get_users_batch", {
-              pubkeys: [fizz.pubkey],
-            })
-          ).profiles[fizz.pubkey]?.avatar_url
-        : null;
-
-      return {
-        fizzIsBot: fizzMember?.role === "bot" && fizzMember.is_agent,
-        fizzPersonaId: fizz?.persona_id ?? null,
-        profileAvatarUrl,
-      };
-    })
-    .toEqual({
-      fizzIsBot: true,
-      fizzPersonaId: "builtin:fizz",
-      profileAvatarUrl: null,
-    });
-
-  if (expectVisible) {
-    await expect(page.getByTestId("message-channel-intro")).toBeVisible();
-    await expect(page.getByTestId("system-message-row")).toHaveCount(0);
-  }
 }
 
 async function expectIncompleteOnboarding(page: Page) {
@@ -1017,7 +527,7 @@ test("fresh-key harness completion continues directly into profile onboarding", 
   await profileSubmit.click();
   await expect(page.getByTestId("onboarding-page-avatar")).toBeVisible();
   await page.getByTestId("onboarding-skip").click();
-  await expectWelcomeView(page);
+  await expectHomeView(page);
 
   await expect(page.getByTestId("app-loading-gate")).toHaveCount(0);
   await expect(page.getByTestId("boot-splash-overlay")).toHaveCount(0);
@@ -2136,26 +1646,10 @@ test("community onboarding reuses an existing relay profile", async ({
       ),
     )
     .toBeGreaterThan(0);
-  await expect(
-    page.getByRole("heading", { name: "Meet your starter team" }),
-  ).toBeVisible();
-  await expect(
-    page
-      .getByTestId("community-onboarding-flow")
-      .locator(".buzz-onboarding-transition-line"),
-  ).toHaveAttribute("data-onboarding-direction", "forward");
-  await expect(
-    page.getByRole("heading", { name: "Build your profile" }),
-  ).toHaveCount(0);
-  await page.getByTestId("community-team-intro-back").click();
-  await expect(
-    page.getByRole("heading", { name: "Build your profile" }),
-  ).toBeVisible();
-  await expect(
-    page
-      .getByTestId("community-onboarding-flow")
-      .locator(".buzz-onboarding-transition-line"),
-  ).toHaveAttribute("data-onboarding-direction", "backward");
+  await expect(page.getByTestId("onboarding-gate")).toHaveCount(0, {
+    timeout: 10_000,
+  });
+  await expectHomeView(page);
 });
 
 test("first-community direct join cancel returns to request access", async ({
@@ -2938,7 +2432,6 @@ test("a pending avatar never becomes durable if propagation fails after onboardi
     page.getByTestId("community-avatar-circle-upload-pending"),
   ).toBeVisible();
   await page.getByTestId("community-profile-next").click();
-  await page.getByTestId("community-team-intro-enter").click();
   await expect(page.getByTestId("community-onboarding-flow")).toHaveCount(0, {
     timeout: 10_000,
   });
@@ -3007,7 +2500,6 @@ test("a pending avatar becomes durable after onboarding unmounts once ready", as
   await page.getByTestId("community-profile-name-key").fill("Tyler");
   await uploadCommunityAvatar(page, "ready-after-unmount-community-avatar.png");
   await page.getByTestId("community-profile-next").click();
-  await page.getByTestId("community-team-intro-enter").click();
   await expect(page.getByTestId("community-onboarding-flow")).toHaveCount(0, {
     timeout: 10_000,
   });
@@ -3401,7 +2893,7 @@ test("avatar step accepts an avatar URL before completing onboarding", async ({
 
   await page.getByTestId("onboarding-next").click();
   await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
-  await expectWelcomeView(page);
+  await expectHomeView(page);
 });
 
 test("failed avatar saves can continue without saving the avatar", async ({
@@ -3436,7 +2928,7 @@ test("failed avatar saves can continue without saving the avatar", async ({
   await page.getByTestId("onboarding-next-without-saving").click();
 
   await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
-  await expectWelcomeView(page);
+  await expectHomeView(page);
 });
 
 test("avatar upload rejects a file whose server-detected MIME is not an image", async ({
@@ -3519,7 +3011,7 @@ test("avatar upload accepts a file whose server-detected MIME is an image", asyn
   await expect(page.getByTestId("onboarding-avatar-error")).toHaveCount(0);
 });
 
-test("first-run onboarding keeps the shell hidden and lands on private Welcome after profile setup", async ({
+test("first-run onboarding keeps the shell hidden and lands on Home without seeding channels", async ({
   page,
 }) => {
   await seedActiveIdentity(page, FIRST_RUN_ALICE);
@@ -3534,9 +3026,45 @@ test("first-run onboarding keeps the shell hidden and lands on private Welcome a
   await page.getByTestId("onboarding-display-name").fill("Alice");
   await completeProfileOnboarding(page);
   await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
-  await expectWelcomeView(page);
-  await expectStarterChannels(page);
-  await expectWelcomeGuideIntro(page);
+  await expectHomeView(page);
+  await expect(page).toHaveURL(/#\/$/);
+  await expect(page.getByTestId("channel-general")).toHaveCount(0);
+  await expect(page.getByTestId("channel-welcome-everyone")).toHaveCount(0);
+  await expect(page.getByTestId("channel-Welcome")).toHaveCount(0);
+});
+
+test("first-run onboarding retires the seeded welcome channels", async ({
+  page,
+}) => {
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
+  await installMockBridge(page, undefined, { skipOnboardingSeed: true });
+  await page.goto("/");
+  await expect(page.getByTestId("onboarding-page-1")).toBeVisible();
+
+  // The mock still seeds the channels an earlier release created.
+  for (const channelId of [
+    "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50",
+    "5f0b1b3c-2a37-5366-9b8c-31a4b21d8e77",
+  ]) {
+    await invokeMockCommand(page, "join_channel", { channelId });
+  }
+  const beforeRetirement = await invokeMockCommand<{
+    channels: { name: string }[];
+  }>(page, "get_channels");
+  expect(beforeRetirement.channels.map((channel) => channel.name)).toEqual(
+    expect.arrayContaining(["general", "welcome-everyone"]),
+  );
+
+  await page.getByTestId("onboarding-display-name").fill("Morty QA");
+  await completeProfileOnboarding(page);
+
+  await expectHomeView(page);
+  await expect(page.getByTestId("channel-general")).toHaveCount(0);
+  await expect(page.getByTestId("channel-welcome-everyone")).toHaveCount(0);
+  await expect(page.getByTestId("channel-Welcome")).toHaveCount(0);
+  expect(await commandCount(page, "retire_welcome_channels")).toBeGreaterThan(
+    0,
+  );
 });
 
 async function commandCount(page: Page, command: string) {
@@ -3548,14 +3076,14 @@ async function commandCount(page: Page, command: string) {
   );
 }
 
-test("failed public starter channel setup does not show a retry toast", async ({
+test("failed welcome retirement still finishes onboarding and lands on Home", async ({
   page,
 }) => {
-  const starterError = "Mock starter channel setup failed.";
+  const retirementError = "Mock welcome retirement failed.";
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await installMockBridge(
     page,
-    { ensureStarterChannelsErrors: [starterError, starterError] },
+    { retireWelcomeChannelsErrors: [retirementError] },
     { skipOnboardingSeed: true },
   );
   await page.goto("/");
@@ -3563,82 +3091,17 @@ test("failed public starter channel setup does not show a retry toast", async ({
   await page.getByTestId("onboarding-display-name").fill("Morty QA");
   await completeProfileOnboarding(page);
 
-  await expectPrivateWelcomeLanding(page);
+  await expectHomeView(page);
+  // A failure is surfaced, never converted to a silent success, and no retry
+  // toast is offered (the idempotent retirement retries on the next start).
+  expect(await commandCount(page, "retire_welcome_channels")).toBeGreaterThan(
+    0,
+  );
   await expect(
     page
       .locator("[data-sonner-toast][data-removed='false']")
       .filter({ hasText: "Couldn't set up starter channels" }),
   ).toHaveCount(0);
-  expect(await commandCount(page, "ensure_starter_channels")).toBe(2);
-});
-
-test("first-run onboarding posts the live Fizz kickoff", async ({ page }) => {
-  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
-  await installMockBridge(
-    page,
-    {
-      globalAgentConfig: {
-        env_vars: { OPENAI_API_KEY: "e2e-placeholder" },
-        provider: "openai",
-        model: "gpt-5.5",
-      },
-    },
-    { skipOnboardingSeed: true },
-  );
-  await page.goto("/");
-
-  await page.getByTestId("onboarding-display-name").fill("Morty QA");
-  await completeProfileOnboarding(page);
-
-  await expectPrivateWelcomeLanding(page);
-  // Runtime start alone cannot satisfy the kickoff's relay-presence wait.
-  const team = await waitForWelcomeTeam(page);
-  const presence = await invokeMockCommand<Record<string, string>>(
-    page,
-    "get_presence",
-    { pubkeys: team.map((agent) => agent.pubkey) },
-  );
-  expect(team.map((agent) => presence[agent.pubkey])).toEqual([
-    "offline",
-    "offline",
-    "offline",
-  ]);
-  await expect(page.getByTestId("message-timeline")).not.toContainText(
-    "Hi Morty QA, I'm Fizz. Welcome to Buzz.",
-  );
-  await publishWelcomeTeamPresence(page);
-  // Greeted by the name typed above — the @mention pill also files the opener
-  // into the new user's Inbox mentions feed.
-  await expect(page.getByTestId("message-timeline")).toContainText(
-    "Hi Morty QA, I'm Fizz. Welcome to Buzz.",
-  );
-  await expect(page.getByTestId("message-timeline")).toContainText(
-    "Honey and Pollen, introduce yourselves",
-  );
-});
-
-test("first-run onboarding lands before Welcome team bootstrap completes", async ({
-  page,
-}) => {
-  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
-  await installMockBridge(
-    page,
-    { createManagedAgentDelayMs: 1_000 },
-    { skipOnboardingSeed: true },
-  );
-  await page.goto("/");
-
-  await page.getByTestId("onboarding-display-name").fill("Morty QA");
-  await completeProfileOnboarding(page);
-
-  await expectPrivateWelcomeLanding(page);
-  await expect(page.getByTestId("app-loading-gate")).toHaveCount(0);
-  await publishWelcomeTeamPresence(page);
-  await expect(page.getByTestId("message-timeline")).toContainText(
-    "Hi Morty QA, I'm Fizz. Welcome to Buzz.",
-  );
-  await page.waitForTimeout(1_500);
-  expect(await commandCount(page, "create_managed_agent")).toBe(3);
 });
 
 test("existing relay profile with display name auto-skips onboarding without localStorage", async ({
@@ -3682,7 +3145,7 @@ test("onboarding uses the existing identity when the community is already set up
   await expect(page.getByText("Create an identity key")).toHaveCount(0);
 });
 
-test("completed onboarding backfills missing starter channels", async ({
+test("completed onboarding retires seeded channels instead of backfilling them", async ({
   page,
 }) => {
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
@@ -3692,13 +3155,12 @@ test("completed onboarding backfills missing starter channels", async ({
 
   await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
   await expectHomeView(page);
-  await expect(page.getByTestId("channel-general")).toBeVisible();
-  await expect(page.getByTestId("channel-welcome-everyone")).toBeVisible();
-  await expectStarterChannels(page);
-  await expectWelcomeGuideIntro(page, { expectVisible: false });
+  await expect(page.getByTestId("channel-general")).toHaveCount(0);
+  await expect(page.getByTestId("channel-welcome-everyone")).toHaveCount(0);
+  await expect(page.getByTestId("channel-Welcome")).toHaveCount(0);
 });
 
-test("finishing onboarding creates starter channels and focuses welcome-everyone for a new member", async ({
+test("finishing onboarding lands on Home for a new member", async ({
   page,
 }) => {
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
@@ -3708,68 +3170,9 @@ test("finishing onboarding creates starter channels and focuses welcome-everyone
   await page.getByTestId("onboarding-display-name").fill("Morty QA");
   await completeProfileOnboarding(page);
 
-  await expectWelcomeView(page);
-  await expect(page.getByTestId("channel-general")).toBeVisible();
-  await expectStarterChannels(page);
-  await expectWelcomeGuideIntro(page);
-  await expectWelcomeComposerBannerCompletesAfterPersonaMention(page);
-});
-
-test("welcome-everywhere banner: X dismiss removes the guidance surface", async ({
-  page,
-}) => {
-  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
-  await installMockBridge(page, undefined, { skipOnboardingSeed: true });
-  await page.goto("/");
-
-  await page.getByTestId("onboarding-display-name").fill("Morty QA");
-  await completeProfileOnboarding(page);
-  await publishWelcomeTeamPresence(page);
-
-  const banner = page.getByTestId("welcome-composer-guide-banner");
-  const guidanceLayer = page.getByTestId("welcome-composer-guidance-layer");
-  const dismissButton = page.getByTestId("welcome-composer-dismiss-button");
-
-  // Banner and guidance layer are visible in the prompt state.
-  await expect(banner).toBeVisible();
-  await expect(guidanceLayer).toBeVisible();
-  await expect(dismissButton).toBeVisible();
-
-  await dismissButton.click();
-
-  // After dismiss the entire guidance surface must be gone.
-  await expect(banner).toHaveCount(0, { timeout: 2_000 });
-  await expect(guidanceLayer).toHaveCount(0);
-});
-
-test("welcome-everywhere banner: dismiss persists after channel re-entry", async ({
-  page,
-}) => {
-  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
-  await installMockBridge(page, undefined, { skipOnboardingSeed: true });
-  await page.goto("/");
-
-  await page.getByTestId("onboarding-display-name").fill("Morty QA");
-  await completeProfileOnboarding(page);
-  await publishWelcomeTeamPresence(page);
-
-  const banner = page.getByTestId("welcome-composer-guide-banner");
-
-  await expect(banner).toBeVisible();
-  await page.getByTestId("welcome-composer-dismiss-button").click();
-  await expect(banner).toHaveCount(0, { timeout: 2_000 });
-
-  // Leave the Welcome channel.
-  await page.getByTestId("channel-general").click();
-  await expect(page.getByTestId("chat-title")).toContainText("general");
-  await expect(banner).toHaveCount(0);
-
-  // Return — banner must stay hidden.
-  await page.getByTestId("channel-welcome-everyone").click();
-  await expect(page.getByTestId("chat-title")).toContainText(
-    "welcome-everyone",
-  );
-  await expect(banner).toHaveCount(0);
+  await expectHomeView(page);
+  await expect(page.getByTestId("channel-general")).toHaveCount(0);
+  await expect(page.getByTestId("channel-welcome-everyone")).toHaveCount(0);
 });
 
 test("initial profile read failures still hold incomplete users in onboarding", async ({
@@ -4040,7 +3443,7 @@ test("same-relay identity replacement rebuilds the community boundary (A→B→A
   // Two full boots (denied-A → imported-B, then relaunch-as-A) plus draft
   // flush polling exceed the default budget.
   test.slow();
-  const GENERAL_CHANNEL_ID = "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50";
+  const ENGINEERING_CHANNEL_ID = "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9";
   const DRAFT_STORE_KEY_PREFIX = "buzz-drafts.v2";
   // Mirrors the bridge's DEFAULT_RELAY_WS_URL and useDrafts'
   // canonicalizeRelayScope (scheme://host, no trailing slash).
@@ -4084,7 +3487,7 @@ test("same-relay identity replacement rebuilds the community boundary (A→B→A
         }),
       );
     },
-    [tylerDraftStoreKey, GENERAL_CHANNEL_ID] as const,
+    [tylerDraftStoreKey, ENGINEERING_CHANNEL_ID] as const,
   );
 
   await page.getByTestId("onboarding-display-name").fill("Morty QA");
@@ -4152,7 +3555,7 @@ test("same-relay identity replacement rebuilds the community boundary (A→B→A
 
   // Leg 2 — alice opens the channel tyler's seeded draft targets: the
   // composer must not restore another identity's draft.
-  await page.getByTestId("channel-general").click();
+  await page.getByTestId("channel-engineering").click();
   const composerInput = page.getByTestId("message-input");
   await expect(composerInput).toBeVisible();
   await expect(composerInput).not.toContainText("tyler private draft");
@@ -4186,7 +3589,7 @@ test("same-relay identity replacement rebuilds the community boundary (A→B→A
   // send succeeds. The mock's send handler asserts the frontend-captured
   // signer against the active identity, so a send that still carried tyler's
   // cached identity would be rejected and never render.
-  await page.getByTestId("channel-general").click();
+  await page.getByTestId("channel-engineering").click();
   await expect(composerInput).toContainText("alice draft after import");
   await composerInput.fill("hello from alice");
   await composerInput.press("Enter");
@@ -4196,8 +3599,7 @@ test("same-relay identity replacement rebuilds the community boundary (A→B→A
   // Leg 4 — A restoration: relaunch as tyler (fully onboarded this time,
   // open relay) on the same relay. Tyler's bucket must restore tyler's
   // draft untouched by alice's session, and alice's draft must stay in
-  // alice's bucket. Tyler is not a member of the mock starter channels, so
-  // reach general through the channel browser.
+  // alice's bucket.
   await seedActiveIdentity(page, TEST_IDENTITIES.tyler);
   await installMockBridge(page);
   await page.goto("/");
@@ -4205,10 +3607,10 @@ test("same-relay identity replacement rebuilds the community boundary (A→B→A
   await openChannelBrowser(page);
   await expect(page.getByTestId("channel-browser-dialog")).toBeVisible();
   await page
-    .getByTestId("browse-channel-general")
+    .getByTestId("browse-channel-engineering")
     .getByRole("button", { name: "Join" })
     .click();
-  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await expect(page.getByTestId("chat-title")).toHaveText("engineering");
   await expect(composerInput).toContainText("tyler private draft");
   await expect(composerInput).not.toContainText("alice draft after import");
 });

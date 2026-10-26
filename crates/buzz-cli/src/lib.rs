@@ -290,6 +290,9 @@ enum Cmd {
     /// Create, trigger, and manage workflows
     #[command(subcommand)]
     Workflows(WorkflowsCmd),
+    /// Create, read, update, skip, and cancel channel meetings
+    #[command(subcommand)]
+    Meetings(commands::meetings::MeetingsCmd),
     /// Read the activity feed
     #[command(subcommand)]
     Feed(FeedCmd),
@@ -1326,7 +1329,7 @@ pub enum ReposCmd {
     },
     /// List repository announcements
     List {
-        /// Owner pubkey (64-char hex). Omit for your repos.
+        /// Owner pubkey (64-char hex). Defaults to self and the attested owner.
         #[arg(long)]
         owner: Option<String>,
         /// Maximum number of results
@@ -1485,13 +1488,13 @@ pub enum ProjectsCmd {
     Get {
         /// Project slug
         slug: String,
-        /// Owner pubkey (64-char hex). Defaults to the current identity.
+        /// Owner pubkey. Defaults to self and attested owner; required for ambiguous slugs.
         #[arg(long)]
         owner: Option<String>,
     },
     /// List projects
     List {
-        /// Owner pubkey (64-char hex). Defaults to the current identity.
+        /// Owner pubkey (64-char hex). Defaults to self and the attested owner.
         #[arg(long)]
         owner: Option<String>,
         /// Maximum number of results
@@ -2257,6 +2260,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Dms(sub) => commands::dms::dispatch(sub, &client).await,
         Cmd::Users(sub) => commands::users::dispatch(sub, &client, &cli.format).await,
         Cmd::Workflows(sub) => commands::workflows::dispatch(sub, &client).await,
+        Cmd::Meetings(sub) => commands::meetings::dispatch(sub, &client, &cli.format).await,
         Cmd::Feed(sub) => commands::feed::dispatch(sub, &client, &cli.format).await,
         Cmd::Social(sub) => commands::social::dispatch(sub, &client).await,
         Cmd::Notes(sub) => commands::notes::dispatch(sub, &client).await,
@@ -2447,6 +2451,7 @@ mod tests {
             "gifs",
             "issues",
             "media",
+            "meetings",
             "mem",
             "messages",
             "moderation",

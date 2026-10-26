@@ -80,7 +80,7 @@ void main() {
 
 class _SuccessfulRecovery implements InviteJoinRecovery {
   @override
-  Future<String?> ensureStarterChannels() async => 'welcome';
+  Future<void> retireWelcomeChannels() async {}
 }
 
 /// Delays the storage read after the provider captures its community list.

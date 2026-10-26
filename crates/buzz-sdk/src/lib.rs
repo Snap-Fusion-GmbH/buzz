@@ -14,10 +14,12 @@
 
 pub mod broker;
 pub mod builders;
+pub mod meetings;
 pub mod mentions;
 pub mod nip_oa;
 
 pub use builders::*;
+pub use meetings::{build_channel_meeting, build_channel_meeting_update};
 
 /// Re-export kind constants so consumers don't need buzz-core directly.
 pub use buzz_core::kind;

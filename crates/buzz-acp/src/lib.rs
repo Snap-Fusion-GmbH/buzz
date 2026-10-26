@@ -571,10 +571,11 @@ mod inbound_author_gate {
         allowlist: &HashSet<String>,
         author: &str,
         is_dm: bool,
+        allow_shared_dms: bool,
         owner_cache: &OwnerCache,
         rest_client: &relay::RestClient,
     ) -> bool {
-        if is_dm {
+        if is_dm && !allow_shared_dms {
             return match respond_to {
                 RespondTo::Nobody => false,
                 _ => is_owner_or_sibling(author, owner_cache, rest_client).await,
@@ -605,6 +606,7 @@ mod inbound_author_gate {
             allowlist,
             author,
             is_dm,
+            false,
             owner_cache,
             rest_client,
         )
@@ -613,6 +615,7 @@ mod inbound_author_gate {
 
     pub(crate) struct InboundAuthorGate {
         agent_pubkey_hex: String,
+        allow_shared_dms: bool,
         relay_self: Option<String>,
         // None means no authoritative NIP-11 result yet, including at startup.
         refreshed_generation: Option<u64>,
@@ -632,9 +635,16 @@ mod inbound_author_gate {
             let (relay_self, completed) = refresh_relay_self(rest_client, None, context).await;
             Self {
                 agent_pubkey_hex: agent_pubkey_hex.to_string(),
+                allow_shared_dms: false,
                 relay_self,
                 refreshed_generation: completed.then_some(0),
             }
+        }
+
+        /// Opt a shared deployment into applying its configured policy in DMs.
+        pub(crate) fn with_shared_dms(mut self, allow_shared_dms: bool) -> Self {
+            self.allow_shared_dms = allow_shared_dms;
+            self
         }
 
         /// Whether delegated workflow attribution is currently available.
@@ -707,6 +717,7 @@ mod inbound_author_gate {
                 allowlist,
                 &effective_author,
                 is_dm,
+                self.allow_shared_dms,
                 owner_cache,
                 rest_client,
             )
@@ -747,6 +758,7 @@ mod inbound_author_gate {
                     effective_author = %decision.effective_author,
                     mode = %respond_to,
                     is_dm = decision.is_dm,
+                    shared_dms = self.allow_shared_dms,
                     "inbound author gate — dropping event"
                 );
                 return None;
@@ -2921,7 +2933,9 @@ async fn run_harness(
 
     let relay_rest_client = relay.rest_client();
     let mut author_gate_ctx =
-        InboundAuthorGate::connect(&relay_rest_client, &pubkey_hex, "startup").await;
+        InboundAuthorGate::connect(&relay_rest_client, &pubkey_hex, "startup")
+            .await
+            .with_shared_dms(config.allow_shared_dms);
 
     relay
         .subscribe_membership_notifications()
@@ -7484,6 +7498,13 @@ mod author_gate_tests {
     async fn listener_boundary_scenario(
         scenario: ListenerBoundaryScenario<'_>,
     ) -> (Option<String>, bool) {
+        listener_boundary_scenario_with_shared_dms(scenario, false).await
+    }
+
+    async fn listener_boundary_scenario_with_shared_dms(
+        scenario: ListenerBoundaryScenario<'_>,
+        allow_shared_dms: bool,
+    ) -> (Option<String>, bool) {
         let ListenerBoundaryScenario {
             listener,
             relay_keys,
@@ -7499,7 +7520,9 @@ mod author_gate_tests {
         let relay_hex = relay_keys.public_key().to_hex();
         let agent = nostr::Keys::generate().public_key().to_hex();
         let (rest_client, server) = nip11_scripted_server(responses).await;
-        let mut gate = InboundAuthorGate::connect(&rest_client, &agent, "listener startup").await;
+        let mut gate = InboundAuthorGate::connect(&rest_client, &agent, "listener startup")
+            .await
+            .with_shared_dms(allow_shared_dms);
         let configured_owner = if cache_owner {
             Some(workflow_owner.to_string())
         } else if cache_sibling {
@@ -7754,6 +7777,54 @@ mod author_gate_tests {
                 "{} listener must enforce Nobody in a DM",
                 listener.name()
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn shared_dm_opt_in_applies_policy_at_both_production_boundaries() {
+        for listener in [ListenerBoundary::Normal, ListenerBoundary::Setup] {
+            for allow_shared_dms in [false, true] {
+                for (respond_to, allowlisted, expected) in [
+                    (RespondTo::Anyone, false, allow_shared_dms),
+                    (RespondTo::Allowlist, true, allow_shared_dms),
+                    (RespondTo::Allowlist, false, false),
+                    (RespondTo::OwnerOnly, false, false),
+                    (RespondTo::Nobody, true, false),
+                ] {
+                    let relay_keys = nostr::Keys::generate();
+                    let author = nostr::Keys::generate().public_key().to_hex();
+                    let relay_hex = relay_keys.public_key().to_hex();
+                    let allowlist = if allowlisted {
+                        HashSet::from([author.clone()])
+                    } else {
+                        HashSet::new()
+                    };
+                    let result = listener_boundary_scenario_with_shared_dms(
+                        ListenerBoundaryScenario {
+                            listener,
+                            relay_keys: &relay_keys,
+                            workflow_owner: &author,
+                            responses: std::collections::VecDeque::from([Ok(
+                                serde_json::json!({ "self": relay_hex }),
+                            )]),
+                            event_generation: 0,
+                            channel_type: "dm",
+                            respond_to: respond_to.clone(),
+                            allowlist,
+                            cache_owner: false,
+                            cache_sibling: false,
+                        },
+                        allow_shared_dms,
+                    )
+                    .await;
+                    assert_eq!(
+                        result.1,
+                        expected,
+                        "{} shared_dms={allow_shared_dms} policy={respond_to}",
+                        listener.name()
+                    );
+                }
+            }
         }
     }
 
@@ -10137,6 +10208,7 @@ mod build_mcp_servers_tests {
             session_title: None,
             permission_mode: config::PermissionMode::BypassPermissions,
             respond_to: config::RespondTo::Anyone,
+            allow_shared_dms: false,
             respond_to_allowlist: std::collections::HashSet::new(),
             allowed_respond_to: vec![],
             persona_env_vars: vec![],
@@ -11274,6 +11346,7 @@ mod error_outcome_emission_tests {
             session_title: None,
             permission_mode: config::PermissionMode::BypassPermissions,
             respond_to: config::RespondTo::Anyone,
+            allow_shared_dms: false,
             respond_to_allowlist: HashSet::new(),
             allowed_respond_to: vec![],
             persona_env_vars: vec![],

@@ -10,6 +10,7 @@ use crate::managed_agents::{
 };
 mod auth_status_cache;
 mod bounded_command;
+pub(crate) use bounded_command::{output_with_limit, output_with_timeout};
 pub(crate) mod command_search;
 mod login_shell;
 mod presets;
@@ -586,7 +587,8 @@ fn resolve_buzz_managed_command(command: &str) -> Option<PathBuf> {
         .find_map(|basename| buzz_managed_command_path(command, basename))
 }
 
-fn resolve_command_uncached(command: &str) -> Option<PathBuf> {
+/// Live foreground lookup for tools that may have been installed since startup.
+pub(crate) fn resolve_command_uncached(command: &str) -> Option<PathBuf> {
     if let Some(path) = resolve_workspace_command(command) {
         return Some(path);
     }

@@ -623,6 +623,9 @@ impl Db {
 // -- Tests --------------------------------------------------------------------
 
 #[cfg(test)]
+mod postgres_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

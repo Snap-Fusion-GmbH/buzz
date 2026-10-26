@@ -591,8 +591,10 @@ export function WorkspaceTabs({
                 profiles={profiles}
                 snapshot={displayedSnapshot}
                 unavailableMessage={
-                  externalHost
-                    ? `Not mirrored on Buzz. Repository files are hosted on ${externalHost}.`
+                  externalHost && gitDataState === "unavailable"
+                    ? externalHost === "github.com"
+                      ? "GitHub repository unavailable"
+                      : `Not mirrored on Buzz. Repository files are hosted on ${externalHost}.`
                     : undefined
                 }
               />

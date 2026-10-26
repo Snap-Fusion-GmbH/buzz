@@ -7,6 +7,32 @@ const LOCAL = "d".repeat(64);
 const OWNER = "deadbeef".repeat(8);
 const PERSONA = "shared-persona";
 
+test("owned relay-only activity waits for telemetry without a runtime status", async ({
+  page,
+}) => {
+  await installMockBridge(page, {
+    managedAgents: [],
+    relayAgents: [
+      {
+        pubkey: REMOTE,
+        ownerPubkey: OWNER,
+        name: "Relay agent A",
+        status: "unknown",
+        channelNames: ["agents"],
+      },
+    ],
+  });
+  await page.goto(
+    `/#/channels/94a444a4-c0a3-5966-ab05-530c6ddc2301?agentSession=${REMOTE}`,
+  );
+  const activity = page.getByTestId("agent-session-thread-panel");
+  await expect(activity).toBeVisible();
+  await expect(activity).not.toContainText("Observer not attached");
+  await expect(activity).toContainText(
+    "Mention Relay agent A in the channel to see its work here.",
+  );
+});
+
 for (const hasSibling of [false, true]) {
   test(`explicit relay-only identity has no local controls (${hasSibling ? "local sibling" : "persona only"})`, async ({
     page,

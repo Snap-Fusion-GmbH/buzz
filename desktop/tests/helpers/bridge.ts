@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 import type { ChannelTemplate, RelayEvent } from "../../src/shared/api/types";
 import type { MockManagedAgentSeed } from "../../src/testing/e2eBridge";
+import type { ManagedWorkspaceStatus } from "../../src/shared/api/tauriManagedWorkspace";
 import { FEATURE_OVERRIDES_STORAGE_KEY, PREVIEW_FEATURE_IDS } from "./features";
 
 export const TEST_IDENTITIES = {
@@ -280,8 +281,13 @@ type MockBridgeOptions = {
   channelsReadErrors?: (string | null)[];
   /** Reject successive mock `create_channel` calls, then resume. */
   createChannelErrors?: string[];
-  /** Reject successive mock `ensure_starter_channels` calls, then resume. */
-  ensureStarterChannelsErrors?: string[];
+  /** Reject successive mock `retire_welcome_channels` calls, then resume. */
+  retireWelcomeChannelsErrors?: string[];
+  /**
+   * Keep the legacy seeded channels instead of retiring them. Specs that
+   * browse the seeded directory need them to remain visible.
+   */
+  keepSeededWelcomeChannels?: boolean;
   /** Reject successive mock `join_channel` calls, then resume. */
   joinChannelErrors?: string[];
   channelsReadDelayMs?: number;
@@ -494,6 +500,13 @@ type MockBridgeOptions = {
    * or `import_identity` is invoked. Drives the identity-lost recovery UX in tests.
    */
   identityLost?: boolean;
+  managedWorkspace?: {
+    status: ManagedWorkspaceStatus;
+    loginResult?: ManagedWorkspaceStatus;
+    statusError?: string;
+    loginError?: string;
+    loginDelayMs?: number;
+  };
   /**
    * When true, `get_identity` returns `locked: true` until `import_identity` is
    * invoked. Drives the keyring-locked screen in tests.
@@ -661,8 +674,8 @@ type BridgeOptions = {
   user?: keyof typeof TEST_IDENTITIES;
 };
 
-const WELCOME_CHANNEL_ENSURED_STORAGE_KEY_PREFIX =
-  "buzz-welcome-channel-ensured.v2:";
+const WELCOME_CHANNELS_RETIRED_STORAGE_KEY_PREFIX =
+  "buzz-welcome-channels-retired.v1:";
 const ONBOARDING_COMPLETION_STORAGE_KEY_PREFIX = "buzz-onboarding-complete.v1:";
 const DEFAULT_MOCK_PUBKEY = "deadbeef".repeat(8);
 // The relay HTTP/WS URLs follow BUZZ_E2E_RELAY_URL (same env var seed.ts reads),
@@ -804,7 +817,7 @@ async function seedOnboardingCompletionForKnownIdentities(
       onboardingPrefix: ONBOARDING_COMPLETION_STORAGE_KEY_PREFIX,
       pubkeys,
       relayUrl: relayWsUrl ?? DEFAULT_RELAY_WS_URL,
-      welcomePrefix: WELCOME_CHANNEL_ENSURED_STORAGE_KEY_PREFIX,
+      welcomePrefix: WELCOME_CHANNELS_RETIRED_STORAGE_KEY_PREFIX,
     },
   );
 }

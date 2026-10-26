@@ -1,5 +1,4 @@
 import 'package:buzz/shared/hosted/hosted_environment.dart';
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -11,6 +10,7 @@ import 'package:pointycastle/digests/sha256.dart';
 
 import 'package:buzz/app.dart';
 import 'package:buzz/features/channels/channel.dart';
+import 'package:buzz/features/channels/channel_management_provider.dart';
 import 'package:buzz/features/invites/invite_join_provider.dart';
 import 'package:buzz/shared/auth/auth.dart';
 import 'package:buzz/shared/deeplink/deep_link.dart';
@@ -171,7 +171,6 @@ void main() {
 
       final state = container.read(inviteJoinProvider);
       expect(state.status, InviteJoinStatus.success);
-      expect(state.focusChannelId, 'welcome-everyone-id');
       expect(capturedRequest, isNotNull);
       expect(
         capturedRequest!.url.toString(),
@@ -244,286 +243,143 @@ void main() {
     );
   });
 
-  test(
-    'invite recovery joins existing public general and welcome-everyone',
-    () async {
-      final joined = <String>[];
-      final recovery = MobileInviteJoinRecovery(
-        loadChannels: () async => [
-          _channel(id: 'general-id', name: ' General '),
-          _channel(id: 'welcome-id', name: 'WELCOME-EVERYONE'),
-          _channel(
-            id: 'private-welcome-id',
-            name: 'Welcome',
-            visibility: 'private',
-          ),
-        ],
-        createChannel:
-            ({
-              required channelId,
-              required name,
-              required channelType,
-              required visibility,
-              description,
-              ttlSeconds,
-            }) async => throw StateError('starters already exist'),
-        joinChannel: (channelId) async => joined.add(channelId),
-        relayHttpOrigin: 'https://relay.example.com',
-      );
-
-      final focusChannelId = await recovery.ensureStarterChannels();
-
-      expect(joined, ['general-id', 'welcome-id']);
-      expect(focusChannelId, 'welcome-id');
-    },
-  );
-
-  test(
-    'invite recovery creates missing public starters with desktop ids',
-    () async {
-      final created = <String, Map<String, Object?>>{};
-      final recovery = MobileInviteJoinRecovery(
-        loadChannels: () async => const [],
-        createChannel:
-            ({
-              required channelId,
-              required name,
-              required channelType,
-              required visibility,
-              description,
-              ttlSeconds,
-            }) async {
-              created[name] = {
-                'id': channelId,
-                'channelType': channelType,
-                'visibility': visibility,
-                'description': description,
-                'ttlSeconds': ttlSeconds,
-              };
-              return _channel(id: channelId, name: name, isMember: true);
-            },
-        joinChannel: (_) async => fail('creator is already a member'),
-        relayHttpOrigin: 'https://relay.example.com/',
-      );
-
-      final focusChannelId = await recovery.ensureStarterChannels();
-
-      expect(created.keys, ['general', 'welcome-everyone']);
-      expect(created['general'], {
-        'id': '9ed9563a-84d6-586d-8007-ae294a6dfdaf',
-        'channelType': 'stream',
-        'visibility': 'open',
-        'description': 'General conversation and community updates.',
-        'ttlSeconds': null,
-      });
-      expect(created['welcome-everyone'], {
-        'id': '1e288e10-2f7d-5c2c-9a9f-dee58c8daa7a',
-        'channelType': 'stream',
-        'visibility': 'open',
-        'description':
-            'Say hi, ask a question, or share what brought you here.',
-        'ttlSeconds': null,
-      });
-      expect(focusChannelId, '1e288e10-2f7d-5c2c-9a9f-dee58c8daa7a');
-    },
-  );
-
-  test(
-    'duplicate starter creation converges and joins relay channels',
-    () async {
-      var loadCount = 0;
-      final joined = <String>[];
-      final recovery = MobileInviteJoinRecovery(
-        loadChannels: () async {
-          loadCount++;
-          if (loadCount == 1) return const [];
-          return [
-            _channel(id: 'relay-general', name: 'general'),
-            _channel(id: 'relay-welcome', name: 'welcome-everyone'),
-          ];
-        },
-        createChannel:
-            ({
-              required channelId,
-              required name,
-              required channelType,
-              required visibility,
-              description,
-              ttlSeconds,
-            }) async => throw Exception(
-              'relay rejected event: duplicate: channel already exists',
-            ),
-        joinChannel: (channelId) async => joined.add(channelId),
-        relayHttpOrigin: 'https://relay.example.com',
-      );
-
-      final focusChannelId = await recovery.ensureStarterChannels();
-
-      expect(loadCount, 2);
-      expect(joined, ['relay-general', 'relay-welcome']);
-      expect(focusChannelId, 'relay-welcome');
-    },
-  );
-
-  test('starter setup surfaces an unavailable starter for recovery', () async {
-    final joined = <String>[];
+  test('invite recovery leaves the legacy public starters', () async {
+    final left = <String>[];
     final recovery = MobileInviteJoinRecovery(
       loadChannels: () async => [
-        _channel(id: 'welcome-id', name: 'welcome-everyone'),
+        _channel(
+          id: desktopStarterChannelId(
+            relayHttpOrigin: 'https://relay.example.com',
+            slug: 'general',
+          ),
+          name: 'general',
+          isMember: true,
+        ),
+        _channel(
+          id: desktopStarterChannelId(
+            relayHttpOrigin: 'https://relay.example.com',
+            slug: 'welcome-everyone',
+          ),
+          name: 'welcome-everyone',
+          isMember: true,
+        ),
       ],
-      createChannel:
-          ({
-            required channelId,
-            required name,
-            required channelType,
-            required visibility,
-            description,
-            ttlSeconds,
-          }) async => throw Exception('relay unavailable'),
-      joinChannel: (channelId) async => joined.add(channelId),
+      loadMembers: (_) async => const [],
+      leaveChannel: (channelId) async => left.add(channelId),
+      deleteChannel: (channelId) async => fail('must not delete'),
       relayHttpOrigin: 'https://relay.example.com',
     );
 
-    await expectLater(
-      recovery.ensureStarterChannels(),
-      throwsA(isA<Exception>()),
+    await recovery.retireWelcomeChannels();
+
+    expect(left, [
+      '9ed9563a-84d6-586d-8007-ae294a6dfdaf',
+      '1e288e10-2f7d-5c2c-9a9f-dee58c8daa7a',
+    ]);
+  });
+
+  test('retirement ignores a same-named channel the community owns', () async {
+    final left = <String>[];
+    final recovery = MobileInviteJoinRecovery(
+      loadChannels: () async => [
+        // Same name, but not the deterministic starter id: this is a channel
+        // the community created on purpose.
+        _channel(id: 'community-general', name: 'general', isMember: true),
+      ],
+      loadMembers: (_) async => const [],
+      leaveChannel: (channelId) async => left.add(channelId),
+      deleteChannel: (channelId) async => fail('must not delete'),
+      relayHttpOrigin: 'https://relay.example.com',
     );
 
-    expect(joined, isEmpty);
+    await recovery.retireWelcomeChannels();
+
+    expect(left, isEmpty);
+  });
+
+  test('retirement deletes a solo owner private Welcome', () async {
+    final left = <String>[];
+    final deleted = <String>[];
+    final recovery = MobileInviteJoinRecovery(
+      loadChannels: () async => [
+        _channel(
+          id: 'welcome-id',
+          name: 'Welcome',
+          visibility: 'private',
+          isMember: true,
+        ),
+      ],
+      loadMembers: (_) async => [
+        _member('me', role: 'owner'),
+        _member('agent', role: 'bot'),
+      ],
+      leaveChannel: (channelId) async => left.add(channelId),
+      deleteChannel: (channelId) async => deleted.add(channelId),
+      relayHttpOrigin: 'https://relay.example.com',
+      currentPubkey: 'me',
+    );
+
+    await recovery.retireWelcomeChannels();
+
+    expect(deleted, ['welcome-id']);
+    expect(left, isEmpty);
   });
 
   test(
-    'starter setup recovery survives dismissal and container recreation',
+    "retirement leaves another human's Welcome instead of deleting it",
     () async {
-      final keys = nostr.Keys.generate();
-      var generatedKeys = 0;
-      var claimRequests = 0;
-      final storage = CommunityStorage(secure: FakeSecureStorage());
-      final firstContainer = ProviderContainer(
-        overrides: [
-          communityStorageProvider.overrideWithValue(storage),
-          inviteKeyGeneratorProvider.overrideWithValue(() {
-            generatedKeys++;
-            return keys;
-          }),
-          inviteJoinRecoveryProvider.overrideWithValue(
-            (_) =>
-                _FakeInviteJoinRecovery(error: Exception('relay disconnected')),
-          ),
-          inviteJoinHttpClientProvider.overrideWithValue(
-            http_testing.MockClient((request) async {
-              claimRequests++;
-              return http.Response(
-                jsonEncode({
-                  'status': 'joined',
-                  'host': 'relay.example.com',
-                  'role': 'member',
-                }),
-                200,
-              );
-            }),
+      final left = <String>[];
+      final deleted = <String>[];
+      final recovery = MobileInviteJoinRecovery(
+        loadChannels: () async => [
+          _channel(
+            id: 'welcome-id',
+            name: 'Welcome',
+            visibility: 'private',
+            isMember: true,
           ),
         ],
-      );
-      await firstContainer
-          .read(inviteJoinProvider.notifier)
-          .prepare(
-            const InviteDeepLink(
-              relayUrl: 'wss://relay.example.com',
-              code: 'code',
-            ),
-          );
-      await firstContainer.read(inviteJoinProvider.notifier).confirmJoin();
-
-      final failed = firstContainer.read(inviteJoinProvider);
-      expect(failed.status, InviteJoinStatus.error);
-      expect(failed.isStarterSetupRecovery, isTrue);
-      expect(generatedKeys, 1);
-      expect(claimRequests, 1);
-      expect((await storage.loadAll()).single.starterSetupIncomplete, isTrue);
-
-      firstContainer.dispose();
-
-      final secondContainer = ProviderContainer(
-        overrides: [
-          communityStorageProvider.overrideWithValue(storage),
-          inviteKeyGeneratorProvider.overrideWithValue(() {
-            generatedKeys++;
-            return nostr.Keys.generate();
-          }),
-          inviteJoinRecoveryProvider.overrideWithValue(
-            (_) => _successfulRecovery(),
-          ),
-          inviteJoinHttpClientProvider.overrideWithValue(
-            http_testing.MockClient((request) async {
-              claimRequests++;
-              return http.Response('{}', 500);
-            }),
-          ),
+        loadMembers: (_) async => [
+          _member('other', role: 'owner'),
+          _member('me', role: 'member'),
         ],
+        leaveChannel: (channelId) async => left.add(channelId),
+        deleteChannel: (channelId) async => deleted.add(channelId),
+        relayHttpOrigin: 'https://relay.example.com',
+        currentPubkey: 'me',
       );
-      addTearDown(secondContainer.dispose);
 
-      await secondContainer
-          .read(inviteJoinProvider.notifier)
-          .prepare(
-            const InviteDeepLink(
-              relayUrl: 'wss://relay.example.com',
-              code: 'code',
-            ),
-          );
-      await secondContainer
-          .read(inviteJoinProvider.notifier)
-          .startStarterSetupRecovery();
+      await recovery.retireWelcomeChannels();
 
-      final recovered = secondContainer.read(inviteJoinProvider);
-      expect(recovered.status, InviteJoinStatus.success);
-      expect(recovered.focusChannelId, 'welcome-everyone-id');
-      expect((await storage.loadAll()).single.starterSetupIncomplete, isFalse);
-      expect(generatedKeys, 1);
-      expect(claimRequests, 1);
+      expect(left, ['welcome-id']);
+      expect(deleted, isEmpty);
     },
   );
 
   test(
-    'starter recovery makes no replacement-tenant submission after a scope switch',
+    'retirement propagates a failure instead of reporting success',
     () async {
-      var isScopeCurrent = true;
-      final firstJoinStarted = Completer<void>();
-      final releaseFirstJoin = Completer<void>();
-      final submitted = <String>[];
       final recovery = MobileInviteJoinRecovery(
         loadChannels: () async => [
-          _channel(id: 'general-id', name: 'general'),
-          _channel(id: 'welcome-id', name: 'welcome-everyone'),
+          _channel(
+            id: desktopStarterChannelId(
+              relayHttpOrigin: 'https://relay.example.com',
+              slug: 'general',
+            ),
+            name: 'general',
+            isMember: true,
+          ),
         ],
-        createChannel:
-            ({
-              required channelId,
-              required name,
-              required channelType,
-              required visibility,
-              description,
-              ttlSeconds,
-            }) async => throw StateError('starters already exist'),
-        joinChannel: (channelId) async {
-          submitted.add(channelId);
-          if (channelId == 'general-id') {
-            firstJoinStarted.complete();
-            await releaseFirstJoin.future;
-          }
-        },
+        loadMembers: (_) async => const [],
+        leaveChannel: (_) async => throw Exception('relay unavailable'),
+        deleteChannel: (_) async => fail('must not delete'),
         relayHttpOrigin: 'https://relay.example.com',
-        isScopeCurrent: () => isScopeCurrent,
       );
 
-      final setup = recovery.ensureStarterChannels();
-      await firstJoinStarted.future;
-      isScopeCurrent = false;
-      releaseFirstJoin.complete();
-
-      await expectLater(setup, throwsA(isA<StateError>()));
-      expect(submitted, ['general-id']);
+      await expectLater(
+        recovery.retireWelcomeChannels(),
+        throwsA(isA<Exception>()),
+      );
     },
   );
 
@@ -695,7 +551,6 @@ void main() {
           scopes.add(scope);
           return _RecordingInviteJoinRecovery(() async {
             recoveries.add(scope);
-            return 'welcome-everyone-id';
           });
         }),
         inviteJoinHttpClientProvider.overrideWithValue(
@@ -741,29 +596,22 @@ void main() {
   });
 }
 
-InviteJoinRecovery _successfulRecovery() =>
-    const _FakeInviteJoinRecovery(focusChannelId: 'welcome-everyone-id');
+InviteJoinRecovery _successfulRecovery() => const _FakeInviteJoinRecovery();
 
 class _FakeInviteJoinRecovery implements InviteJoinRecovery {
-  final String? focusChannelId;
-  final Object? error;
-
-  const _FakeInviteJoinRecovery({this.focusChannelId, this.error});
+  const _FakeInviteJoinRecovery();
 
   @override
-  Future<String?> ensureStarterChannels() async {
-    if (error case final failure?) throw failure;
-    return focusChannelId;
-  }
+  Future<void> retireWelcomeChannels() async {}
 }
 
 class _RecordingInviteJoinRecovery implements InviteJoinRecovery {
-  const _RecordingInviteJoinRecovery(this._ensure);
+  const _RecordingInviteJoinRecovery(this._retire);
 
-  final Future<String?> Function() _ensure;
+  final Future<void> Function() _retire;
 
   @override
-  Future<String?> ensureStarterChannels() => _ensure();
+  Future<void> retireWelcomeChannels() => _retire();
 }
 
 Channel _channel({
@@ -782,6 +630,9 @@ Channel _channel({
   memberCount: isMember ? 1 : 0,
   isMember: isMember,
 );
+
+ChannelMember _member(String pubkey, {required String role}) =>
+    ChannelMember(pubkey: pubkey, role: role, joinedAt: DateTime.utc(2026));
 
 class _RecordingAuthNotifier extends AuthNotifier {
   final List<Community> authenticatedCommunities = [];

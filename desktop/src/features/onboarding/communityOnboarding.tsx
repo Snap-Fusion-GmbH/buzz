@@ -18,7 +18,6 @@ export type CommunityOnboardingStage =
   | "claiming"
   | "connecting"
   | "profile"
-  | "team-intro"
   | "finalizing"
   /**
    * Backend setup is done and the app is mounting directly on the Welcome
@@ -94,6 +93,15 @@ function canonicalRelayUrl(rawRelayUrl: string) {
   return parsed.toString().replace(/\/$/, "");
 }
 
+function normalizePersistedStage(stage: string): CommunityOnboardingStage {
+  // Older builds persisted the removed starter-team intro. Resume that
+  // in-flight transaction at setup instead of discarding it and replaying
+  // onboarding through the legacy flow.
+  return stage === "team-intro"
+    ? "finalizing"
+    : (stage as CommunityOnboardingStage);
+}
+
 function isTransaction(
   value: unknown,
 ): value is CommunityOnboardingTransaction {
@@ -123,7 +131,11 @@ export function loadCommunityOnboardingTransaction(
     const raw = storage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
-    return isTransaction(parsed) ? parsed : null;
+    if (!isTransaction(parsed)) return null;
+    return {
+      ...parsed,
+      stage: normalizePersistedStage(parsed.stage),
+    };
   } catch {
     return null;
   }

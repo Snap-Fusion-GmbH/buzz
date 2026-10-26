@@ -20,6 +20,7 @@ import type {
   ObservedUnreadResponse,
 } from "@/shared/api/tauriObservedUnread";
 import type { UnreadCatchUpChannelResult } from "@/shared/api/tauriUnreadCatchUp";
+import type { ManagedWorkspaceStatus } from "@/shared/api/tauriManagedWorkspace";
 import { relayClient } from "@/shared/api/relayClient";
 import { activateRateLimit } from "@/shared/api/relayRateLimitGate";
 import { resolveAgentParallelism } from "@/features/agents/lib/agentParallelism";
@@ -37,6 +38,14 @@ import {
   createMockSubscription,
   hasMockSubscription,
 } from "./e2eBridgeSubscriptions.ts";
+import { installMockHuddleCameraOwner } from "./e2eBridgeHuddleCamera.ts";
+import { createMeetingMock } from "./e2eBridgeMeetings";
+import { mockCommandLogPayload } from "./e2eBridgeCommandLog";
+import {
+  handleMockGitHub,
+  mockGitHubSnapshot,
+  recordMockGitHubPush,
+} from "./e2eBridgeGitHub";
 export { mockSearchHitMatches };
 import type { ConnectionState } from "@/shared/api/relayClientShared";
 import type {
@@ -211,6 +220,13 @@ type MockHuddleSeed = {
 type E2eConfig = {
   mode?: "mock" | "relay";
   mock?: {
+    managedWorkspace?: {
+      status: ManagedWorkspaceStatus;
+      loginResult?: ManagedWorkspaceStatus;
+      statusError?: string;
+      loginError?: string;
+      loginDelayMs?: number;
+    };
     /** Tauri window label exposed to the app. Defaults to the main window. */
     windowLabel?: string;
     ttsSettings?: {
@@ -372,8 +388,13 @@ type E2eConfig = {
     channelsReadErrors?: (string | null)[];
     /** Reject successive mock `create_channel` calls, then resume. */
     createChannelErrors?: string[];
-    /** Reject successive mock `ensure_starter_channels` calls, then resume. */
-    ensureStarterChannelsErrors?: string[];
+    /** Reject successive mock `retire_welcome_channels` calls, then resume. */
+    retireWelcomeChannelsErrors?: string[];
+    /**
+     * Keep the legacy seeded channels instead of retiring them. Specs that
+     * browse the seeded directory need them to remain visible.
+     */
+    keepSeededWelcomeChannels?: boolean;
     /** Reject successive mock `join_channel` calls, then resume. */
     joinChannelErrors?: string[];
     channelsReadDelayMs?: number;
@@ -7239,37 +7260,31 @@ async function handleGetPresence(
   return result;
 }
 
-async function handleEnsureStarterChannels(
+async function handleRetireWelcomeChannels(
   config: E2eConfig | undefined,
 ): Promise<{
-  channels: RawChannelWithMembership[];
-  changed_channel_ids: string[];
-  error: null;
+  retired_channel_ids: string[];
+  error: string | null;
 }> {
-  const starterChannelError =
-    config?.mock?.ensureStarterChannelsErrors?.shift();
-  if (starterChannelError) {
-    throw new Error(starterChannelError);
+  const retirementError = config?.mock?.retireWelcomeChannelsErrors?.shift();
+  if (retirementError) {
+    throw new Error(retirementError);
+  }
+
+  if (config?.mock?.keepSeededWelcomeChannels) {
+    return { retired_channel_ids: [], error: null };
   }
 
   const currentPubkey = getMockMemberPubkey(config);
-  const changedChannelIds: string[] = [];
-  const ensureMember = (channel: MockChannel) => {
-    if (
-      channel.members.some(
-        (member) =>
-          normalizePubkey(member.pubkey) === normalizePubkey(currentPubkey),
-      )
-    ) {
-      return;
-    }
+  const isMember = (channel: MockChannel) =>
+    channel.members.some(
+      (member) =>
+        normalizePubkey(member.pubkey) === normalizePubkey(currentPubkey),
+    );
+  const retiredChannelIds: string[] = [];
 
-    channel.members.push(createCurrentMember(config, "member"));
-    syncMockChannel(channel);
-    touchMockChannel(channel);
-    changedChannelIds.push(channel.id);
-  };
-
+  // Public starters are only left; the mock keeps the channel and drops this
+  // identity from its roster, mirroring `retire_welcome_channels`.
   for (const channelName of [
     STARTER_GENERAL_CHANNEL_NAME,
     STARTER_WELCOME_CHANNEL_NAME,
@@ -7279,19 +7294,37 @@ async function handleEnsureStarterChannels(
         candidate.name === channelName &&
         candidate.channel_type === "stream" &&
         candidate.visibility === "open" &&
-        candidate.archived_at === null,
+        candidate.archived_at === null &&
+        isMember(candidate),
     );
     if (!channel) {
-      throw new Error(`Starter channel ${channelName} not found.`);
+      continue;
     }
-    ensureMember(channel);
+    channel.members = channel.members.filter(
+      (member) =>
+        normalizePubkey(member.pubkey) !== normalizePubkey(currentPubkey),
+    );
+    syncMockChannel(channel);
+    touchMockChannel(channel);
+    retiredChannelIds.push(channel.id);
   }
 
-  return {
-    channels: listMockChannels(config),
-    changed_channel_ids: changedChannelIds,
-    error: null,
-  };
+  // The private per-user Welcome is deleted for its solo owner.
+  const index = mockChannels.findIndex(
+    (candidate) =>
+      candidate.name === "Welcome" &&
+      candidate.channel_type === "stream" &&
+      candidate.visibility === "private" &&
+      candidate.archived_at === null &&
+      isMember(candidate),
+  );
+  if (index !== -1) {
+    const [channel] = mockChannels.splice(index, 1);
+    mockMessages.delete(channel.id);
+    retiredChannelIds.push(channel.id);
+  }
+
+  return { retired_channel_ids: retiredChannelIds, error: null };
 }
 
 async function handleCreateChannel(
@@ -7978,6 +8011,15 @@ async function handleAddChannelMembers(
 
     syncMockChannel(targetChannel);
     touchMockChannel(targetChannel);
+    for (const agent of mockRelayAgents) {
+      if (
+        added.includes(agent.pubkey) &&
+        !agent.channel_ids.includes(targetChannel.id)
+      ) {
+        agent.channel_ids.push(targetChannel.id);
+        agent.channels.push(targetChannel.name);
+      }
+    }
     syncMockRelayAgentsFromManagedAgents();
     return {
       added,
@@ -12039,6 +12081,7 @@ export function maybeInstallE2eTauriMocks() {
       sourceUrl: null;
     };
   }> = [];
+  const handleMeetingMock = createMeetingMock();
   const handleMockCommand = async (
     command: string,
     payload: unknown,
@@ -12046,22 +12089,19 @@ export function maybeInstallE2eTauriMocks() {
     const activeConfig = getConfig();
     const identity = getActiveIdentity(activeConfig);
     window.__BUZZ_E2E_COMMANDS__?.push(command);
-    const loggedPayload = (() => {
-      if (payload instanceof Uint8Array) {
-        return { rawByteLength: payload.byteLength };
-      }
-      try {
-        return JSON.parse(JSON.stringify(payload ?? null));
-      } catch {
-        return null;
-      }
-    })();
+    const loggedPayload = mockCommandLogPayload(payload);
     window.__BUZZ_E2E_COMMAND_PAYLOADS__?.push({
       command,
       payload: loggedPayload,
     });
     window.__BUZZ_E2E_COMMAND_LOG__?.push({ command, payload });
 
+    const meetingResult = handleMeetingMock(
+      command,
+      payload,
+      getMockMemberPubkey(activeConfig),
+    );
+    if (meetingResult.handled) return meetingResult.value;
     switch (command) {
       case "get_huddle_state": {
         const snapshot = mockHuddle ? structuredClone(mockHuddle.state) : null;
@@ -13006,7 +13046,24 @@ export function maybeInstallE2eTauriMocks() {
         // Matches the synthetic human author on a mock snapshot commit so the
         // viewer-identity avatar attribution is exercised in e2e.
         return { name: "Avery E", email: "avery@example.com" };
-      case "get_project_repo_snapshot":
+      case "get_github_access_status":
+      case "connect_github_account":
+      case "list_github_repositories":
+      case "get_github_repository":
+        return handleMockGitHub(command, payload);
+      case "get_github_repository_state": {
+        const seed = MOCK_PROJECT_SEEDS.find(
+          (repository) =>
+            repository.cloneUrl ===
+            (payload as { cloneUrl?: string } | undefined)?.cloneUrl,
+        );
+        return handleMockGitHub(
+          command,
+          payload,
+          seed ? readMockProjectBranches()[seed.dtag] : undefined,
+        );
+      }
+      case "get_project_repo_snapshot": {
         if (activeConfig?.mock?.projectRepoSnapshotDelayMs) {
           await new Promise((resolve) =>
             window.setTimeout(
@@ -13018,6 +13075,10 @@ export function maybeInstallE2eTauriMocks() {
         if (activeConfig?.mock?.projectRepoSnapshotError) {
           throw new Error(activeConfig.mock.projectRepoSnapshotError);
         }
+        const github = mockGitHubSnapshot(
+          (payload as { cloneUrl?: string } | undefined)?.cloneUrl,
+        );
+        if (github) return github;
         return {
           latest_commit: {
             hash: "0123456789abcdef0123456789abcdef01234567",
@@ -13112,6 +13173,7 @@ export function maybeInstallE2eTauriMocks() {
             },
           ],
         };
+      }
       case "get_project_local_repo_snapshot":
         return window.__BUZZ_E2E_PROJECT_LOCAL_REPO_SNAPSHOT__ ?? null;
       case "get_project_repo_file_content":
@@ -13213,11 +13275,15 @@ export function maybeInstallE2eTauriMocks() {
       case "open_project_repository_folder":
         return null;
       case "push_project_local_repository": {
-        const input = payload as { branchName?: string | null };
+        const input = payload as {
+          branchName?: string | null;
+          cloneUrl?: string;
+        };
         const status = window.__BUZZ_E2E_PROJECT_REPO_SYNC_STATUS__;
         const branch = input.branchName ?? status?.remote_branch ?? "main";
         const commit =
           status?.local_head ?? "0123456789abcdef0123456789abcdef01234567";
+        recordMockGitHubPush(input.cloneUrl, commit);
         if (status) {
           status.remote_branch = branch;
           status.remote_head = commit;
@@ -13242,7 +13308,14 @@ export function maybeInstallE2eTauriMocks() {
         };
       case "clone_project_repository": {
         // Clones land in reposDir/<repo-name>, matching the terminal mocks.
-        const path = "/tmp/buzz/REPOS/buzz";
+        const input = payload as { cloneUrl: string };
+        const name =
+          new URL(input.cloneUrl).pathname
+            .split("/")
+            .filter(Boolean)
+            .at(-1)
+            ?.replace(/\.git$/, "") ?? "buzz";
+        const path = `/tmp/buzz/REPOS/${name}`;
         const commit = "0123456789abcdef0123456789abcdef01234567";
         window.__BUZZ_E2E_PROJECT_REPO_SYNC_STATUS__ = {
           local_path: path,
@@ -13584,6 +13657,41 @@ export function maybeInstallE2eTauriMocks() {
         return getRelayWsUrl(activeConfig);
       case "get_default_relay_url":
         return getRelayWsUrl(activeConfig);
+      case "managed_workspace_status":
+        if (activeConfig?.mock?.managedWorkspace?.statusError) {
+          throw activeConfig.mock.managedWorkspace.statusError;
+        }
+        return (
+          activeConfig?.mock?.managedWorkspace?.status ?? {
+            enabled: false,
+            signed_in: false,
+            workspace_id: null,
+            public_key: null,
+            profile: null,
+          }
+        );
+      case "managed_workspace_login": {
+        const managed = activeConfig?.mock?.managedWorkspace;
+        if (managed?.loginDelayMs) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, managed.loginDelayMs),
+          );
+        }
+        if (managed?.loginError) throw managed.loginError;
+        if (managed) {
+          managed.status = managed.loginResult ?? managed.status;
+          return managed.status;
+        }
+        return {
+          enabled: false,
+          signed_in: false,
+          workspace_id: null,
+          public_key: null,
+          profile: null,
+        };
+      }
+      case "cancel_managed_workspace_login":
+        return null;
       case "auto_connect_default_relay_enabled":
         return activeConfig?.autoConnectDefaultRelay ?? false;
       case "get_legacy_workspace_storage":
@@ -14403,8 +14511,8 @@ export function maybeInstallE2eTauriMocks() {
           payload as Parameters<typeof handleCreateChannel>[0],
           activeConfig,
         );
-      case "ensure_starter_channels":
-        return handleEnsureStarterChannels(activeConfig);
+      case "retire_welcome_channels":
+        return handleRetireWelcomeChannels(activeConfig);
       case "open_dm":
         return handleOpenDm(
           payload as Parameters<typeof handleOpenDm>[0],
@@ -15401,6 +15509,10 @@ export function maybeInstallE2eTauriMocks() {
   window.__BUZZ_E2E_EMIT_TAURI_EVENT__ = (event, payload) =>
     emit(event, payload);
   mockIPC(handleMockCommand, { shouldMockEvents: true });
+  void installMockHuddleCameraOwner(
+    config.mock?.windowLabel,
+    () => mockHuddle?.state.ephemeral_channel_id ?? null,
+  );
   const tauriInternals = (
     window as typeof window & {
       __TAURI_INTERNALS__: {

@@ -207,11 +207,14 @@ export function ReadmePanel({
             )}
           </div>
           <h3 className="text-base font-semibold text-foreground">
-            Code hosted on {externalHost}
+            {externalHost === "github.com"
+              ? "GitHub repository unavailable"
+              : `Code hosted on ${externalHost}`}
           </h3>
           <p className="mt-1 max-w-lg text-sm text-muted-foreground">
-            Clone this repository locally to explore its files, commits, and
-            contributors in Buzz.
+            {externalHost === "github.com"
+              ? "GitHub sign-in, repository access, or connection is unavailable."
+              : "Clone this repository locally to explore its files, commits, and contributors in Buzz."}
           </p>
           {externalOpenUrl ? (
             <a

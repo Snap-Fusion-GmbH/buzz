@@ -7,7 +7,7 @@ members = ["crates/buzz-terminal"]
 
 [package]
 name = "buzz-desktop"
-version = "0.5.28"
+version = "0.5.37"
 description = "Buzz desktop app"
 authors = ["you"]
 edition = "2021"
@@ -33,6 +33,8 @@ base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri-build = { version = "2", features = [] }
+url = "2"
+uuid = "1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -55,6 +57,10 @@ notify-rust = "4"
 # to the exact version wry links so both resolve to one webkit2gtk-sys and we
 # don't get duplicate symbols; bump in lockstep with wry.
 webkit2gtk = { version = "=2.0.2", features = ["v2_22"] }
+ashpd = { version = "0.13", features = ["screencast"] }
+gstreamer = "0.24"
+gstreamer-app = "0.24"
+gstreamer-video = "0.24"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = { version = "0.6", default-features = false, features = ["std"] }
@@ -74,6 +80,7 @@ keyring = { version = "3.6.3", default-features = false, features = ["windows-na
 user-idle = { version = "0.6", default-features = false }
 
 [dependencies]
+oauth2 = { version = "5.0.0", default-features = false, features = ["reqwest", "rustls-tls"] }
 atomic-write-file = "0.3"
 anyhow = "1"
 dirs = "6"
@@ -139,6 +146,8 @@ png = "0.18"
 # target-gated inside arboard; at runtime X11 sessions still fall back to X11.
 arboard = { version = "3", features = ["wayland-data-control"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
+xcap = "0.9"
+openh264 = "0.9"
 zip = "9"
 flate2 = "1"
 sherpa-onnx = "1.12"

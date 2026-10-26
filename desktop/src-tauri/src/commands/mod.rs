@@ -40,6 +40,7 @@ mod media_snapshot_png;
 mod media_transcode;
 mod media_upload_progress;
 mod media_voice_note;
+mod meetings;
 #[cfg(feature = "mesh-llm")]
 pub(crate) mod mesh_llm;
 #[cfg(feature = "mesh-llm")]
@@ -63,6 +64,7 @@ mod project_git_recipient_notes;
 mod project_git_types;
 mod project_git_upload;
 mod project_git_workflow;
+mod project_github;
 mod project_repo_paths;
 mod project_terminal;
 mod qr_download;
@@ -107,6 +109,7 @@ pub use media::*;
 pub use media_download::*;
 pub use media_fetch_cancellation::*;
 pub use media_raw::*;
+pub use meetings::*;
 #[cfg(feature = "mesh-llm")]
 pub use mesh_llm::*;
 pub use messages::*;
@@ -124,6 +127,7 @@ pub use project_git_file_content::*;
 pub use project_git_recipient_notes::*;
 pub use project_git_upload::*;
 pub use project_git_workflow::*;
+pub use project_github::*;
 pub use project_terminal::*;
 pub use qr_download::*;
 pub use relay_members::*;

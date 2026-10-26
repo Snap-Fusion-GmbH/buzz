@@ -591,6 +591,11 @@ pub async fn validate_admin_event(
         .get_channel_for_event_write(tenant.community(), channel_id)
         .await
         .map_err(|_| anyhow::anyhow!("channel not found"))?;
+    if state.config.managed_access.as_ref().is_some_and(|policy| {
+        policy.controls_channel(&channel.created_by) && !policy.is_controller(&actor_bytes)
+    }) {
+        anyhow::bail!("channel permissions and metadata are managed by the directory");
+    }
     if kind != 9002 && channel.archived_at.is_some() && !is_self_departure(event) {
         return Err(anyhow::anyhow!("channel is archived"));
     }
