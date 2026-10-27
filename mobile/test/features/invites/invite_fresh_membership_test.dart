@@ -39,7 +39,7 @@ void main() {
       addTearDown(container.dispose);
       await container.read(channelsProvider.future);
       await expectLater(
-        container.read(recovery).ensureStarterChannels(),
+        container.read(recovery).retireWelcomeChannels(),
         throwsA(
           isA<StateError>().having(
             (e) => e.message,
