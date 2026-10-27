@@ -772,13 +772,13 @@ mod postgres_tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 73);
+        assert_eq!(migrations.len(), 74);
         assert!(migrations
             .windows(2)
             .all(|pair| pair[0].version < pair[1].version));
         assert_eq!(migrations[72].version, 73);
+        assert_eq!(migrations[73].version, 74);
         assert_eq!(migrations[71].version, 72);
-        assert_eq!(migrations[70].version, 71);
         assert!(migrations[70]
             .sql
             .as_str()
@@ -848,8 +848,8 @@ mod postgres_tests {
             .sql
             .as_str()
             .contains("ADD COLUMN through_message_id"));
-        assert_eq!(migrations[70].version, 71);
-        assert!(migrations[70]
+        assert_eq!(migrations[73].version, 74);
+        assert!(migrations[73]
             .sql
             .as_str()
             .contains("ADD COLUMN join_role TEXT NOT NULL DEFAULT 'member'"));
