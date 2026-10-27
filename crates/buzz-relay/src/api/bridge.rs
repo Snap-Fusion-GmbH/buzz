@@ -1254,7 +1254,7 @@ async fn submit_event_authed(
             let response = super::internal_error(crate::handlers::auth::OWNER_LINK_ERROR);
             return SubmitOutcome::Err {
                 status: response.0,
-                response,
+                response: response.into(),
             };
         }
     }
