@@ -142,7 +142,8 @@ async fn expired_writer_membership_is_denied_without_deleting_the_roster_row() {
         .await
         .unwrap();
     let member_bytes = member.public_key().to_bytes();
-    let decision = || check_relay_membership(&state, tenant.community(), &member_bytes, None, None);
+    let decision =
+        || check_relay_membership(&state, tenant.community(), &member_bytes, None, None, None);
     assert_eq!(decision().await.unwrap(), MembershipDecision::Member);
     let invitee = Keys::generate();
     let _ = state
@@ -161,6 +162,7 @@ async fn expired_writer_membership_is_denied_without_deleting_the_roster_row() {
             &state,
             tenant.community(),
             &invitee.public_key().to_bytes(),
+            None,
             None,
             None,
         )
@@ -299,6 +301,7 @@ async fn managed_agents_need_verified_ownership_and_a_current_same_community_own
                 &agent_bytes,
                 candidate,
                 signed_time,
+                None,
             )
             .await
             .unwrap(),
@@ -312,6 +315,7 @@ async fn managed_agents_need_verified_ownership_and_a_current_same_community_own
             &agent_bytes,
             Some(&tag),
             Some(timestamp),
+            None,
         )
         .await
         .unwrap(),
@@ -330,6 +334,7 @@ async fn managed_agents_need_verified_ownership_and_a_current_same_community_own
             &agent_bytes,
             Some(&tag),
             Some(timestamp),
+            None,
         )
         .await
         .unwrap(),
@@ -346,6 +351,7 @@ async fn managed_agents_need_verified_ownership_and_a_current_same_community_own
             &successor.public_key().to_bytes(),
             Some(&chained_tag),
             Some(timestamp),
+            None,
         )
         .await
         .unwrap(),
@@ -378,6 +384,7 @@ async fn managed_agents_need_verified_ownership_and_a_current_same_community_own
                 &agent_bytes,
                 Some(&tag),
                 Some(timestamp),
+                None,
             )
             .await
             .unwrap(),
@@ -405,6 +412,7 @@ async fn managed_agents_need_verified_ownership_and_a_current_same_community_own
             &agent_bytes,
             Some(&controller_tag),
             Some(timestamp),
+            None,
         )
         .await
         .unwrap(),
@@ -431,6 +439,7 @@ async fn managed_agents_need_verified_ownership_and_a_current_same_community_own
             &agent_bytes,
             Some(&tag),
             Some(timestamp),
+            None,
         )
         .await
         .unwrap(),
@@ -489,6 +498,7 @@ async fn managed_agent_cannot_switch_its_recorded_owner_to_bypass_expiry() {
             agent.public_key().as_bytes(),
             Some(&replacement_tag),
             Some(timestamp),
+            None,
         )
         .await
         .unwrap(),

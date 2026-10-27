@@ -9537,6 +9537,7 @@ pub(crate) mod postgres_tests {
             agent.public_key(),
             fresh_nip98_event_id_bytes(),
             Some(nostr::Timestamp::now().as_secs()),
+            None,
         )
         .await;
         assert!(
