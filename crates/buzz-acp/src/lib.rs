@@ -6370,7 +6370,8 @@ async fn run_models(args: ModelsArgs) -> Result<()> {
     // Extract agent info from initialize response.
     // ACP spec uses "serverInfo" (MCP heritage); some agents may use "agentInfo".
     let info_obj = init_result
-        .get("serverInfo")
+        .get("info")
+        .or_else(|| init_result.get("serverInfo"))
         .or_else(|| init_result.get("agentInfo"));
     let agent_name = info_obj
         .and_then(|ai| ai.get("name"))

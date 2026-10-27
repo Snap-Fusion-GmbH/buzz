@@ -133,8 +133,8 @@ fn agent_error_from_json(error: &serde_json::Value) -> AcpError {
 fn build_initialize_params() -> serde_json::Value {
     serde_json::json!({
         "protocolVersion": 2,
-        "clientCapabilities": build_client_capabilities(),
-        "clientInfo": {
+        "capabilities": build_client_capabilities(),
+        "info": {
             "name": "buzz-acp",
             "version": env!("CARGO_PKG_VERSION")
         },
@@ -2671,26 +2671,25 @@ mod tests {
             "method": "initialize",
             "params": {
                 "protocolVersion": 2,
-                "clientCapabilities": build_client_capabilities(),
-                "clientInfo": {
+                "capabilities": build_client_capabilities(),
+                "info": {
                     "name": "buzz-acp",
                     "version": "0.1.0"
                 }
             }
         });
         assert_eq!(msg["params"]["protocolVersion"].as_u64(), Some(2));
+        assert_eq!(msg["params"]["info"]["name"].as_str(), Some("buzz-acp"));
+        assert!(msg["params"]["capabilities"].is_object());
+        assert!(msg["params"].get("clientInfo").is_none());
+        assert!(msg["params"].get("clientCapabilities").is_none());
         assert_eq!(
-            msg["params"]["clientInfo"]["name"].as_str(),
-            Some("buzz-acp")
-        );
-        assert!(msg["params"]["clientCapabilities"].is_object());
-        assert_eq!(
-            msg["params"]["clientCapabilities"]["auth"]["terminal"].as_bool(),
+            msg["params"]["capabilities"]["auth"]["terminal"].as_bool(),
             Some(true),
             "terminal auth capability must be advertised so adapters can expose terminal login methods"
         );
         assert_eq!(
-            msg["params"]["clientCapabilities"]["_meta"]["goose"]["customNotifications"].as_bool(),
+            msg["params"]["capabilities"]["_meta"]["goose"]["customNotifications"].as_bool(),
             Some(true),
             "goose customNotifications capability must be advertised"
         );
