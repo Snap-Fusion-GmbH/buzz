@@ -17,7 +17,7 @@ export type UpdateStatus =
   | {
       state: "manual-required";
       version: string;
-      /** GitHub releases page for the update. */
+      /** Download location for the running distribution's update. */
       releaseUrl: string;
     };
 
@@ -33,6 +33,26 @@ const BACKGROUND_BLOCKED_STATES = new Set<UpdateStatus["state"]>([
 ]);
 
 const GITHUB_RELEASES_URL = "https://github.com/block/buzz/releases/latest";
+
+function manualDownloadUrl(update: Update): string {
+  const platforms = update.rawJson?.platforms;
+  if (platforms && typeof platforms === "object") {
+    const platform = (platforms as Record<string, unknown>)[
+      updaterPolicy.linux_debian_target
+    ];
+    if (platform && typeof platform === "object" && "url" in platform) {
+      try {
+        const url = new URL(String(platform.url));
+        if (url.protocol === "https:" && !url.username && !url.password) {
+          return url.href;
+        }
+      } catch {
+        return GITHUB_RELEASES_URL;
+      }
+    }
+  }
+  return GITHUB_RELEASES_URL;
+}
 
 function toErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -154,23 +174,18 @@ export function useUpdater() {
           !background || manualResultRequestedRef.current;
 
         if (update) {
-          // Check support BEFORE exposing any actionable state — on a Linux
-          // .deb, the window between "available" and "manual-required" would
-          // let a click reach an un-updatable install.
           const autoUpdateOk = await isAutoUpdateSupported();
           updateRef.current = update;
           if (autoUpdateOk) {
             setStatus({ state: "available", version: update.version });
             void downloadUpdate();
           } else {
-            // .deb / non-AppImage: surface manual-download card instead.
-            // updateRef is intentionally NOT retained — no install handle
-            // should be kept when we will never install in-app.
             updateRef.current = null;
+            await update.close();
             setStatus({
               state: "manual-required",
               version: update.version,
-              releaseUrl: GITHUB_RELEASES_URL,
+              releaseUrl: manualDownloadUrl(update),
             });
           }
         } else if (shouldShowQuietResult) {

@@ -1,4 +1,5 @@
 {
   "schema_version": 1,
-  "background_check_interval_ms": 900000
+  "background_check_interval_ms": 900000,
+  "linux_debian_target": "linux-x86_64-deb"
 }
