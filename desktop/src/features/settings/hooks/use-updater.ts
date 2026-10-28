@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { isAutoUpdateSupported } from "@/shared/api/tauri";
+import updaterPolicy from "@/shared/config/updater-policy.json";
 
 export type UpdateStatus =
   | { state: "idle" }
@@ -20,7 +21,8 @@ export type UpdateStatus =
       releaseUrl: string;
     };
 
-const BACKGROUND_UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const BACKGROUND_UPDATE_CHECK_INTERVAL_MS =
+  updaterPolicy.background_check_interval_ms;
 const BACKGROUND_BLOCKED_STATES = new Set<UpdateStatus["state"]>([
   "checking",
   "available",
