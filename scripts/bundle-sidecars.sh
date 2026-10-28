@@ -11,15 +11,16 @@ else
     BUILD_HINT="cargo build --release -p buzz-acp -p buzz-agent -p buzz-dev-mcp -p git-credential-nostr -p buzz-cli"
 fi
 BINARIES_DIR="desktop/src-tauri/binaries"
+TARGET_DIR="${CARGO_TARGET_DIR:-target}"
 
 # When --target is passed explicitly to cargo (even if it matches the host),
 # binaries land in target/<triple>/release/. Without --target, they land in
 # target/release/. The script receives the target as $1 only when cargo was
 # invoked with --target, so use the qualified path whenever $1 is set.
 if [[ -n "${1:-}" ]]; then
-    SRC_DIR="target/${TARGET}/release"
+    SRC_DIR="${TARGET_DIR}/${TARGET}/release"
 else
-    SRC_DIR="target/release"
+    SRC_DIR="${TARGET_DIR}/release"
 fi
 
 # MSVC emits <name>.exe; Tauri's externalBin then expects binaries/<name>-<triple>.exe.
