@@ -633,6 +633,24 @@ async fn actor_owns_any_owner_agent(
 /// are refused on a DM.
 const DM_MEMBERSHIP_REFUSAL: &str = "DM members change only through kind:41011";
 
+/// Refuse a membership or metadata change to a directory-managed channel by
+/// anyone but the directory controller (`BUZZ_MANAGED_ACCESS`).
+///
+/// Every validator that admits a channel mutation calls this before deciding
+/// anything else, so a new validator cannot silently skip directory control.
+fn refuse_directory_managed_change(
+    state: &AppState,
+    channel_creator: &[u8],
+    actor: &[u8],
+) -> anyhow::Result<()> {
+    if state.config.managed_access.as_ref().is_some_and(|policy| {
+        policy.controls_channel(channel_creator) && !policy.is_controller(actor)
+    }) {
+        anyhow::bail!("channel permissions and metadata are managed by the directory");
+    }
+    Ok(())
+}
+
 /// Validate an admin kind event BEFORE storage.
 pub async fn validate_admin_event(
     tenant: &TenantContext,
@@ -684,11 +702,7 @@ pub async fn validate_admin_event(
         .get_channel_for_event_write(tenant.community(), channel_id)
         .await
         .map_err(|_| anyhow::anyhow!("channel not found"))?;
-    if state.config.managed_access.as_ref().is_some_and(|policy| {
-        policy.controls_channel(&channel.created_by) && !policy.is_controller(&actor_bytes)
-    }) {
-        anyhow::bail!("channel permissions and metadata are managed by the directory");
-    }
+    refuse_directory_managed_change(state, &channel.created_by, &actor_bytes)?;
     if kind != 9002 && channel.archived_at.is_some() && !is_self_departure(event) {
         return Err(anyhow::anyhow!("channel is archived"));
     }
@@ -1932,6 +1946,8 @@ pub(crate) async fn validate_put_user(
         .get_channel_for_event_write(tenant.community(), channel_id)
         .await
         .map_err(|_| anyhow::anyhow!("channel not found"))?;
+    let actor_bytes = event.pubkey.to_bytes().to_vec();
+    refuse_directory_managed_change(state, &channel.created_by, &actor_bytes)?;
     if channel.archived_at.is_some() {
         anyhow::bail!("channel is archived");
     }
@@ -1940,7 +1956,6 @@ pub(crate) async fn validate_put_user(
     }
     let targets = put_user_targets(event)?;
 
-    let actor_bytes = event.pubkey.to_bytes().to_vec();
     let mut members = state.db.get_members(tenant.community(), channel_id).await?;
     let join_role = buzz_db::channel::ChannelJoinRole::parse_fail_closed(&channel.join_role);
 
