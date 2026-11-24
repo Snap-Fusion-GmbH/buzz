@@ -38,9 +38,9 @@ void main() {
     addTearDown(container.dispose);
   });
 
-  Future<String?> attempt() {
+  Future<void> attempt() {
     container.invalidate(recovery);
-    return container.read(recovery).ensureStarterChannels();
+    return container.read(recovery).retireWelcomeChannels();
   }
 
   void setStatus(SessionStatus status) =>
@@ -59,13 +59,14 @@ void main() {
 
     config().update(baseUrl: _relay, nsec: keys.nsec);
     setStatus(SessionStatus.connected);
-    expect(await attempt(), 'welcome-everyone');
+    await attempt();
+    expect(channels.freshReads, 1);
   });
 
   test('retry waits for a connection lost after an earlier wait', () async {
     await container.read(activeCommunityProvider.future);
     setStatus(SessionStatus.connected);
-    expect(await attempt(), 'welcome-everyone');
+    await attempt();
     expect(channels.freshReads, 1);
 
     setStatus(SessionStatus.disconnected);
@@ -74,7 +75,7 @@ void main() {
     expect(channels.freshReads, 1);
 
     setStatus(SessionStatus.connected);
-    expect(await retry, 'welcome-everyone');
+    await retry;
     expect(channels.freshReads, 2);
   });
 }
