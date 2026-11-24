@@ -338,20 +338,60 @@ async fn legacy_fixture() -> (PgPool, Vec<LegacyInviteCase>) {
         cases.push(LegacyInviteCase { community });
     }
     // Preserve a populated, non-default join role across both upgrade paths.
-    sqlx::query(
+    // This fork adds `join_role` last (0106; see
+    // docs/fork-migration-compatibility.md), so at 0074 the channel can only
+    // be populated without one; it must survive and gain the default.
+    let insert = if join_role_column_exists(&pool).await {
         "INSERT INTO channels (community_id, name, created_by, join_role) \
-         VALUES ($1, 'upgrade-guest', $2, 'guest')",
-    )
-    .bind(cases[0].community)
-    .bind(issuer.as_slice())
-    .execute(&pool)
-    .await
-    .unwrap();
+         VALUES ($1, 'upgrade-guest', $2, 'guest')"
+    } else {
+        "INSERT INTO channels (community_id, name, created_by) \
+         VALUES ($1, 'upgrade-guest', $2)"
+    };
+    sqlx::query(insert)
+        .bind(cases[0].community)
+        .bind(issuer.as_slice())
+        .execute(&pool)
+        .await
+        .unwrap();
     assert_join_role_preserved(&pool, cases[0].community).await;
     (pool, cases)
 }
 
+async fn join_role_column_exists(pool: &PgPool) -> bool {
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = 'public' AND table_name = 'channels' \
+           AND column_name = 'join_role')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// Whether the populated fixture was written with an explicit guest role:
+/// only when the 0074 upgrade source already had the column. Decided from the
+/// embedded order because the desired-state path replaces the ledger.
+fn fixture_has_guest_role() -> bool {
+    crate::migration::embedded_migration_version("channel join role")
+        .is_some_and(|version| version <= 74)
+}
+
 async fn assert_join_role_preserved(pool: &PgPool, community: Uuid) {
+    let name: String = sqlx::query_scalar(
+        "SELECT name FROM channels WHERE community_id = $1 AND name = 'upgrade-guest'",
+    )
+    .bind(community)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        name, "upgrade-guest",
+        "upgrading must keep the populated channel"
+    );
+    if !join_role_column_exists(pool).await {
+        return;
+    }
     let column: (String, String, Option<String>) = sqlx::query_as(
         "SELECT data_type, is_nullable, column_default \
          FROM information_schema.columns \
@@ -372,8 +412,13 @@ async fn assert_join_role_preserved(pool: &PgPool, community: Uuid) {
     .fetch_one(pool)
     .await
     .unwrap();
+    let expected = if fixture_has_guest_role() {
+        "guest"
+    } else {
+        "member"
+    };
     assert_eq!(
-        join_role, "guest",
+        join_role, expected,
         "upgrading must preserve channel admission policy"
     );
 }

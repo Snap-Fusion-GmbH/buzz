@@ -1,5 +1,5 @@
 use super::*;
-use crate::{DbConfig, DbError};
+use crate::DbConfig;
 
 const ALLOW: AgentAddPolicy<'static> = &|_: &str, _: &[u8]| Ok(());
 
@@ -136,14 +136,39 @@ async fn migration_schema_deleted_dm_releases_participant_hash() {
     crate::migration::run_migrations_through(&pool, 66)
         .await
         .expect("apply migrations preceding DM uniqueness fix");
-    let (db, community, keys) = fixture().await;
-    let old_id = deleted_dm(&db, community, &keys).await;
-    let error = db
-        .open_dm(community, &[&keys[1]], &keys[0], false, ALLOW)
+    // Today's DM code reads columns added after 66, so the pre-fix failure is
+    // reproduced at the schema level: a soft-deleted DM still reserves its
+    // participants' hash, and a replacement DM for the same people collides.
+    let community = Uuid::new_v4();
+    sqlx::query("INSERT INTO communities (id, host) VALUES ($1, $2)")
+        .bind(community)
+        .bind(format!("deleted-dm-{community}.example"))
+        .execute(&pool)
+        .await
+        .expect("create community");
+    let hash = vec![7u8; 32];
+    let insert_dm = |deleted: bool| {
+        sqlx::query(
+            "INSERT INTO channels (community_id, name, channel_type, visibility, created_by, \
+             participant_hash, deleted_at) \
+             VALUES ($1, 'dm', 'dm', 'private', $2, $3, CASE WHEN $4 THEN NOW() END)",
+        )
+        .bind(community)
+        .bind(vec![1u8; 32])
+        .bind(hash.clone())
+        .bind(deleted)
+    };
+    insert_dm(true)
+        .execute(&pool)
+        .await
+        .expect("retain soft-deleted original DM");
+    let error = insert_dm(false)
+        .execute(&pool)
         .await
         .expect_err("old index reproduces the production failure");
-    assert!(
-        matches!(error, DbError::Sqlx(ref e) if e.as_database_error().and_then(|e| e.constraint()) == Some("idx_channels_dm_hash")),
+    assert_eq!(
+        error.as_database_error().and_then(|e| e.constraint()),
+        Some("idx_channels_dm_hash"),
         "expected participant-hash conflict, got {error:?}"
     );
     crate::migration::run_migrations(&pool)
@@ -156,5 +181,8 @@ async fn migration_schema_deleted_dm_releases_participant_hash() {
     .await
     .expect("read migration state");
     assert!(applied, "DM uniqueness migration must have been applied");
-    assert_reopen(&db, community, &keys, old_id).await;
+    insert_dm(false)
+        .execute(&pool)
+        .await
+        .expect("a deleted DM no longer reserves its participants' hash");
 }

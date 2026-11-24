@@ -14,6 +14,17 @@ use crate::Result;
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 
+/// The embedded version of the migration with this description, for tests
+/// whose fixtures depend on this fork's migration order. Read-only: it never
+/// runs a migration.
+#[cfg(test)]
+pub(crate) fn embedded_migration_version(description: &str) -> Option<i64> {
+    MIGRATOR
+        .iter()
+        .find(|migration| migration.description == description)
+        .map(|migration| migration.version)
+}
+
 /// Run all pending Buzz database migrations.
 ///
 /// The entire run holds the exclusive [`SCHEMA_DESTRUCTION_LOCK_KEY`] session
