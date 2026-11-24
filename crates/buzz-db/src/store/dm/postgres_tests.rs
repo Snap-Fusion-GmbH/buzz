@@ -1,6 +1,8 @@
 use super::*;
 use crate::{DbConfig, DbError};
 
+const ALLOW: AgentAddPolicy<'static> = &|_: &str, _: &[u8]| Ok(());
+
 async fn fixture() -> (Db, CommunityId, [Vec<u8>; 2]) {
     let db = Db::new(&DbConfig {
         database_url: crate::test_support::database_url(),
@@ -20,7 +22,7 @@ async fn fixture() -> (Db, CommunityId, [Vec<u8>; 2]) {
 
 async fn deleted_dm(db: &Db, community: CommunityId, keys: &[Vec<u8>; 2]) -> Uuid {
     let (channel, created) = db
-        .open_dm(community, &[&keys[1]], &keys[0])
+        .open_dm(community, &[&keys[1]], &keys[0], false, ALLOW)
         .await
         .expect("open original DM");
     assert!(created);
@@ -39,7 +41,7 @@ async fn deleted_dm(db: &Db, community: CommunityId, keys: &[Vec<u8>; 2]) -> Uui
 
 async fn assert_reopen(db: &Db, community: CommunityId, keys: &[Vec<u8>; 2], old_id: Uuid) {
     let (replacement, created) = db
-        .open_dm(community, &[&keys[1]], &keys[0])
+        .open_dm(community, &[&keys[1]], &keys[0], false, ALLOW)
         .await
         .expect("deleted DM must not block reopening");
     assert!(created);
@@ -68,7 +70,7 @@ async fn assert_reopen(db: &Db, community: CommunityId, keys: &[Vec<u8>; 2], old
         .await
         .expect("hide replacement for other participant");
     let (same, created) = db
-        .open_dm(community, &[&keys[0]], &keys[1])
+        .open_dm(community, &[&keys[0]], &keys[1], false, ALLOW)
         .await
         .expect("reopen existing DM from other participant");
     assert!(!created);
@@ -104,7 +106,13 @@ async fn assert_reopen(db: &Db, community: CommunityId, keys: &[Vec<u8>; 2], old
         .await
         .expect("create other community");
     let (other, created) = db
-        .open_dm(CommunityId::from_uuid(other_id), &[&keys[1]], &keys[0])
+        .open_dm(
+            CommunityId::from_uuid(other_id),
+            &[&keys[1]],
+            &keys[0],
+            false,
+            ALLOW,
+        )
         .await
         .expect("same participants may open a DM in another community");
     assert!(created);
@@ -131,7 +139,7 @@ async fn migration_schema_deleted_dm_releases_participant_hash() {
     let (db, community, keys) = fixture().await;
     let old_id = deleted_dm(&db, community, &keys).await;
     let error = db
-        .open_dm(community, &[&keys[1]], &keys[0])
+        .open_dm(community, &[&keys[1]], &keys[0], false, ALLOW)
         .await
         .expect_err("old index reproduces the production failure");
     assert!(

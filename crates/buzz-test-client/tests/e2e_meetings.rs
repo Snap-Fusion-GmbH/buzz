@@ -95,6 +95,7 @@ async fn meetings_create_conflict_privacy_cancel_and_replay_use_the_live_relay()
         Some(buzz_sdk::ChannelKind::Stream),
         None,
         None,
+        false,
     )
     .unwrap()
     .sign_with_keys(&owner)

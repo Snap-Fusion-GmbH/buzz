@@ -1,8 +1,10 @@
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+import 'package:buzz/shared/http/app_http_client.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:nostr/nostr.dart' as nostr;
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../shared/hosted/hosted_relay_auth.dart';
 import '../../shared/hosted/community_entry_requirements.dart';
@@ -16,6 +18,13 @@ final inviteJoinHttpClientProvider = Provider<http.Client>((ref) {
   final client = ref.watch(hostedHttpClientFactoryProvider)();
   ref.onDispose(client.close);
   return client;
+});
+
+/// Opens policy acceptance in the browser without claiming another identity.
+final invitePolicyLauncherProvider = Provider<Future<bool> Function(Uri)>((
+  ref,
+) {
+  return (uri) => launchUrl(uri, mode: LaunchMode.externalApplication);
 });
 
 final inviteKeyGeneratorProvider = Provider<InviteKeyGenerator>((ref) {
@@ -73,6 +82,7 @@ class InviteJoinState {
   final String? communityName;
   final String? errorMessage;
   final bool requiresFreshInvite;
+  final bool requiresPolicyAcceptance;
   final bool isStarterSetupRecovery;
 
   const InviteJoinState({
@@ -82,6 +92,7 @@ class InviteJoinState {
     this.communityName,
     this.errorMessage,
     this.requiresFreshInvite = false,
+    this.requiresPolicyAcceptance = false,
     this.isStarterSetupRecovery = false,
   });
 
@@ -92,6 +103,7 @@ class InviteJoinState {
     String? communityName,
     Object? errorMessage = _unset,
     bool? requiresFreshInvite,
+    bool? requiresPolicyAcceptance,
     bool? isStarterSetupRecovery,
   }) => InviteJoinState(
     status: status ?? this.status,
@@ -102,6 +114,8 @@ class InviteJoinState {
         ? this.errorMessage
         : errorMessage as String?,
     requiresFreshInvite: requiresFreshInvite ?? this.requiresFreshInvite,
+    requiresPolicyAcceptance:
+        requiresPolicyAcceptance ?? this.requiresPolicyAcceptance,
     isStarterSetupRecovery:
         isStarterSetupRecovery ?? this.isStarterSetupRecovery,
   );
@@ -119,6 +133,7 @@ class InviteJoinNotifier extends Notifier<InviteJoinState> {
     final communities = await ref.read(communityListProvider.future);
     final existing = _existingCommunity(communities, invite.relayUrl);
     if (existing != null) {
+      await _retirePendingInvite(invite, existing);
       await ref
           .read(communityListProvider.notifier)
           .switchCommunity(existing.id);
@@ -171,6 +186,7 @@ class InviteJoinNotifier extends Notifier<InviteJoinState> {
       final communities = await ref.read(communityListProvider.future);
       final existing = _existingCommunity(communities, invite.relayUrl);
       if (existing != null) {
+        await _retirePendingInvite(invite, existing);
         await ref
             .read(communityListProvider.notifier)
             .switchCommunity(existing.id);
@@ -196,7 +212,17 @@ class InviteJoinNotifier extends Notifier<InviteJoinState> {
         return;
       }
 
-      final keys = ref.read(inviteKeyGeneratorProvider)();
+      final storage = ref.read(communityStorageProvider);
+      final nsec = await storage.pendingInviteIdentity(
+        invite.relayUrl,
+        invite.code,
+        () => ref.read(inviteKeyGeneratorProvider)().nsec,
+      );
+      final decodedKey = nostr.Nip19.decode(payload: nsec);
+      if (decodedKey.prefix != nostr.Nip19Prefix.nsec) {
+        throw const FormatException('Pending invite identity is unreadable');
+      }
+      final keys = nostr.Keys(decodedKey.data);
       final body = jsonEncode({
         'code': invite.code,
         if (invite.policyReceipt != null)
@@ -244,6 +270,7 @@ class InviteJoinNotifier extends Notifier<InviteJoinState> {
       await ref
           .read(authProvider.notifier)
           .authenticateWithCommunity(community);
+      await _retirePendingInvite(invite, community);
       _pendingStarterSetupCommunity = community;
       state = state.copyWith(isStarterSetupRecovery: true);
       await startStarterSetupRecovery();
@@ -253,7 +280,45 @@ class InviteJoinNotifier extends Notifier<InviteJoinState> {
         status: InviteJoinStatus.error,
         errorMessage: _friendlyInviteError(error),
         requiresFreshInvite: requiresFreshInvite,
+        requiresPolicyAcceptance: error.toString().contains(
+          'join_policy_required',
+        ),
       );
+    }
+  }
+
+  /// Opens the canonical invite so the user can accept the current join policy.
+  Future<bool> openPolicyAcceptance() async {
+    final invite = state.invite;
+    if (!state.requiresPolicyAcceptance || invite == null) return false;
+    final relay = Uri.parse(invite.relayUrl);
+    final uri = relay.replace(
+      scheme: relay.scheme == 'wss' ? 'https' : 'http',
+      pathSegments: ['invite', invite.code],
+    );
+    try {
+      if (await ref.read(invitePolicyLauncherProvider)(uri)) return true;
+    } catch (_) {
+      // Keep the pending identity and expose the same action for another try.
+    }
+    state = state.copyWith(
+      errorMessage:
+          'Could not open the browser. Try reviewing the join requirements again.',
+    );
+    return false;
+  }
+
+  Future<void> _retirePendingInvite(
+    InviteDeepLink invite,
+    Community community,
+  ) async {
+    try {
+      await ref
+          .read(communityStorageProvider)
+          .completePendingInvite(invite.relayUrl, invite.code, community);
+    } catch (_) {
+      // The saved destination is authoritative. Reopening retries cleanup;
+      // community removal must erase every journal copy before it succeeds.
     }
   }
 
@@ -429,15 +494,29 @@ bool _requiresFreshInvite(Object error) {
 
 String _friendlyInviteError(Object error) {
   final message = error.toString();
+  if (message.contains('invite_restricted')) {
+    return 'This account, or the account that owns it, is restricted in this community. Contact a community administrator. If the restriction is temporary, try again after it ends.';
+  }
+  if (message.contains('invite_owner_mismatch')) {
+    return 'This account does not match its recorded owner. Use the correct account or owner identity to join this community.';
+  }
   if (message.contains('invite_expired')) return 'This invite has expired.';
   if (message.contains('invite_exhausted')) {
     return 'This invite has reached its use limit. Ask for a new invite.';
   }
   if (message.contains('invite_invalid')) return 'This invite is not valid.';
   if (message.contains('join_policy_required')) {
-    return 'This invite approval has expired. Re-open the invite link to try again.';
+    return 'Review this community’s join requirements in your browser, then return to Buzz.';
   }
-  if (message.contains('SocketException') ||
+  final failure = transportFailure(error);
+  if (failure == TransportFailure.insecure) {
+    return 'Secure connection failed. Check your network settings and try again.';
+  }
+  if (failure == TransportFailure.timedOut) {
+    return 'Connection timed out. Check your internet connection and try again.';
+  }
+  if (failure == TransportFailure.unreachable ||
+      message.contains('SocketException') ||
       message.contains('Connection refused') ||
       message.contains('Network is unreachable') ||
       message.contains('No route to host')) {
@@ -448,7 +527,8 @@ String _friendlyInviteError(Object error) {
 
 String _friendlyStarterSetupError(Object error) {
   final message = error.toString();
-  if (message.contains('SocketException') ||
+  if (transportFailure(error) == TransportFailure.unreachable ||
+      message.contains('SocketException') ||
       message.contains('Connection refused') ||
       message.contains('Network is unreachable') ||
       message.contains('No route to host')) {

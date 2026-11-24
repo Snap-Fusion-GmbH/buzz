@@ -41,7 +41,11 @@ void reviewAvatarTests() {
       expect(find.widgetWithText(FilledButton, 'Join'), findsNothing);
       expect(find.byTooltip('Join Huddle'), findsNothing);
       expect(find.byTooltip('Open Huddle'), findsNothing);
-      expect(find.byTooltip('Start Huddle'), findsOneWidget);
+      await tester.tap(
+        find.byKey(const ValueKey('channel-header-settings-trigger')),
+      );
+      await tester.pumpAndSettle();
+      await _scrollDetailsTo(tester, find.text('Start a huddle'));
     });
   }
   for (final room in [
@@ -52,7 +56,7 @@ void reviewAvatarTests() {
     '{$_huddleChannelId}',
   ]) {
     testWidgets(
-      'relay-valid huddle UUID has row and header invitation: $room',
+      'relay-valid huddle UUID has row and settings invitation: $room',
       (tester) async {
         final event = _huddleMsg(
           id: 'valid-room',
@@ -76,7 +80,11 @@ void reviewAvatarTests() {
           find.byKey(const ValueKey('huddle-Join-$_huddleChannelId')),
           findsOneWidget,
         );
-        expect(find.byTooltip('Open Huddle'), findsOneWidget);
+        await tester.tap(
+          find.byKey(const ValueKey('channel-header-settings-trigger')),
+        );
+        await tester.pumpAndSettle();
+        await _scrollDetailsTo(tester, find.text('Open Huddle'));
       },
     );
   }
@@ -121,7 +129,7 @@ void reviewAvatarTests() {
         findsOneWidget,
       );
       await tester.pump(const Duration(milliseconds: 300));
-      expect(readState.markedContexts['activity:$_channelId'], 1300);
+      expect(readState.markedContexts[_channelId], 1300);
     },
   );
   testWidgets(
@@ -207,10 +215,7 @@ void reviewAvatarTests() {
           ),
         );
         await tester.pumpAndSettle();
-        final gate = find.byType(MessageMediaAvatar).first;
-        final avatar = find
-            .descendant(of: gate, matching: find.byType(AvatarImage))
-            .first;
+
         final profile = tester.getSemantics(
           find.bySemanticsLabel('Open Alice profile'),
         );
@@ -244,55 +249,44 @@ void reviewAvatarTests() {
           return found;
         }
 
-        final carousel = find.byKey(const ValueKey('message-media-carousel'));
-        final controller =
-            tester
-                    .widget<CustomScrollView>(
-                      find.descendant(
-                        of: carousel,
-                        matching: find.byType(CustomScrollView),
-                      ),
-                    )
-                    .controller!
-                as PageController;
+        final stack = find.byKey(const ValueKey('message-media-stack'));
         expect(profileIsAccessible(), isTrue);
-        controller.jumpTo(-10);
-        await tester.pump();
-        expect(profileIsAccessible(), isTrue);
-        controller.jumpToPage(1);
+        await tester.drag(stack, const Offset(-140, 0));
         await tester.pumpAndSettle();
-        expect(profileIsAccessible(), isFalse);
-        final pageBeforeEdit = controller.page;
-        expect(pageBeforeEdit, greaterThan(0.5));
-        notifier.setMessages([message('Edited caption')]);
-        await tester.pumpAndSettle();
-        expect(controller.page, pageBeforeEdit);
-        expect(profileIsAccessible(), isFalse);
-        controller.jumpToPage(0);
-        await tester.pumpAndSettle();
-        // The semantics node may be recreated after exclusion.
         expect(
           tester
-              .getSemantics(avatar)
-              .getSemanticsData()
-              .hasAction(SemanticsAction.tap),
-          isTrue,
+              .widget<Semantics>(
+                find.byKey(const ValueKey('message-media-stack-semantics')),
+              )
+              .properties
+              .value,
+          'Photo 2 of 2',
         );
-        controller.jumpToPage(1);
+        // Stacks stay inside their row; cycling never covers the profile.
+        expect(profileIsAccessible(), isTrue);
+        notifier.setMessages([message('Edited caption')]);
         await tester.pumpAndSettle();
+        expect(
+          tester
+              .widget<Semantics>(
+                find.byKey(const ValueKey('message-media-stack-semantics')),
+              )
+              .properties
+              .value,
+          'Photo 2 of 2',
+        );
+        expect(profileIsAccessible(), isTrue);
         notifier.setMessages([message('New media', 'replacement')]);
         await tester.pumpAndSettle();
-        final replacementController =
-            tester
-                    .widget<CustomScrollView>(
-                      find.descendant(
-                        of: carousel,
-                        matching: find.byType(CustomScrollView),
-                      ),
-                    )
-                    .controller!
-                as PageController;
-        expect(replacementController.page, 0);
+        expect(
+          tester
+              .widget<Semantics>(
+                find.byKey(const ValueKey('message-media-stack-semantics')),
+              )
+              .properties
+              .value,
+          'Photo 1 of 2',
+        );
         final restored = tester.getSemantics(
           find.bySemanticsLabel('Open Alice profile'),
         );

@@ -55,7 +55,7 @@ async fn cmd_add_channel_draft(
     let owner = PublicKey::parse(&owner_hex)
         .map_err(|error| CliError::Auth(format!("invalid owner attestation: {error}")))?;
     let built = build_project_channel(
-        client.keys(),
+        client.credentials(),
         &owner,
         CreateProjectChannelDraft {
             home_channel_id: home_channel,
@@ -65,7 +65,8 @@ async fn cmd_add_channel_draft(
             ttl_seconds,
             template_name,
         },
-    )?;
+    )
+    .await?;
     let response = client.publish_ephemeral_event(built.event).await?;
     let mut output: serde_json::Value = serde_json::from_str(&response)
         .map_err(|error| CliError::Other(format!("invalid relay response: {error}")))?;
@@ -181,7 +182,7 @@ pub async fn add_repos_to_own_project(
     repos: &[String],
 ) -> Result<String, CliError> {
     validate_project_slug(slug)?;
-    let caller_pubkey = client.keys().public_key().to_hex();
+    let caller_pubkey = client.public_key().to_hex();
 
     let new_members: Vec<ProjectMemberCoord> = repos
         .iter()
@@ -230,7 +231,7 @@ pub async fn add_repos_to_own_project(
     }
 
     let builder = rebuild_project(&head.content, tags, next_ts)?;
-    let event = client.sign_event(builder)?;
+    let event = client.sign_event(builder).await?;
     client.submit_event(event).await
 }
 
@@ -241,7 +242,7 @@ pub async fn try_add_own_repo_to_channel_project(
     repo_id: &str,
 ) -> Result<(), CliError> {
     let projects = fetch_projects_for_channel(client, channel).await?;
-    let caller = client.keys().public_key().to_hex();
+    let caller = client.public_key().to_hex();
     let Some(event) = projects.iter().find(|candidate| {
         candidate.pubkey.to_hex().eq_ignore_ascii_case(&caller) && !project_is_unlisted(candidate)
     }) else {
@@ -267,7 +268,7 @@ async fn fetch_project(
             crate::validate::validate_hex64(pk)?;
             pk.to_string()
         }
-        None => client.keys().public_key().to_hex(),
+        None => client.public_key().to_hex(),
     };
     let filter = serde_json::json!({
         "kinds": [KIND_PROJECT],
@@ -314,7 +315,7 @@ async fn submit_project(
     builder: EventBuilder,
     link_slug: Option<&str>,
 ) -> Result<(), CliError> {
-    let event = client.sign_event(builder)?;
+    let event = client.sign_event(builder).await?;
     let owner = event.pubkey.to_hex();
     let raw = client.submit_event(event).await?;
     let response = parse_write_response(&raw, "project changed concurrently; retry")?;
@@ -377,7 +378,7 @@ pub async fn cmd_create(
     // ── Local validation (all checks before any .await) ───────────────────
     validate_project_slug(slug)?;
 
-    let caller_pubkey = client.keys().public_key().to_hex();
+    let caller_pubkey = client.public_key().to_hex();
 
     // Expand and validate repo coordinates.
     let mut members: Vec<ProjectMemberCoord> = repos
@@ -485,7 +486,7 @@ pub async fn cmd_remove_repo(
     repos: &[String],
 ) -> Result<(), CliError> {
     validate_project_slug(slug)?;
-    let caller_pubkey = client.keys().public_key().to_hex();
+    let caller_pubkey = client.public_key().to_hex();
 
     // ── Local validation before any .await ────────────────────────────────
     let to_remove: Vec<ProjectMemberCoord> = repos
@@ -657,12 +658,12 @@ pub async fn cmd_delete(client: &BuzzClient, slug: &str) -> Result<(), CliError>
         .ok_or_else(|| CliError::NotFound(format!("project {slug:?} not found")))?;
     let next_ts = next_timestamp(&head, Timestamp::now())?;
 
-    let pubkey_hex = client.keys().public_key().to_hex();
+    let pubkey_hex = client.public_key().to_hex();
     let tombstone = build_delete_addressable(KIND_PROJECT, &pubkey_hex, slug)
         .map_err(|e| CliError::Other(format!("failed to build delete event: {e}")))?
         .custom_created_at(next_ts);
 
-    let event = client.sign_event(tombstone)?;
+    let event = client.sign_event(tombstone).await?;
     let raw = client.submit_event(event).await?;
     parse_write_response(&raw, "delete event was dominated; a newer head exists")?;
 
@@ -702,7 +703,7 @@ async fn ensure_default_create_repo(
         &[],
         Some(channel),
     )?;
-    let event = client.sign_event(builder)?;
+    let event = client.sign_event(builder).await?;
     let raw = client.submit_event(event).await?;
     let winner = fetch_own_repo_announcement(client, &repo_id).await?;
     verify_default_repo_write(&raw, winner.as_ref(), channel)?;
@@ -916,7 +917,11 @@ mod tests {
                 socket.write_all(response.as_bytes()).await.unwrap();
             }
         });
-        let client = crate::client::BuzzClient::new(base_url, keys, None, None).unwrap();
+        let client = crate::client::BuzzClient::new(
+            base_url,
+            crate::credentials::Credentials::from_keys(keys),
+        )
+        .unwrap();
         let result = cmd_create(
             &client,
             "app",
@@ -989,8 +994,11 @@ mod tests {
                 .await
                 .unwrap();
         });
-        let client =
-            crate::client::BuzzClient::new(base_url, nostr::Keys::generate(), None, None).unwrap();
+        let client = crate::client::BuzzClient::new(
+            base_url,
+            crate::credentials::Credentials::from_keys(nostr::Keys::generate()),
+        )
+        .unwrap();
 
         let projects = fetch_projects_for_channel(&client, channel).await.unwrap();
         assert!(projects.is_empty());
@@ -1037,8 +1045,11 @@ mod tests {
             );
             socket.write_all(response.as_bytes()).await.unwrap();
         });
-        let client =
-            crate::client::BuzzClient::new(base_url, nostr::Keys::generate(), None, None).unwrap();
+        let client = crate::client::BuzzClient::new(
+            base_url,
+            crate::credentials::Credentials::from_keys(nostr::Keys::generate()),
+        )
+        .unwrap();
 
         let projects = fetch_projects_for_channel_bounded(&client, channel, 1)
             .await
@@ -1478,8 +1489,11 @@ mod tests {
         // Port 9 is the discard protocol — any real connect will be refused
         // immediately, but the guard fires before the first await so this
         // never reaches the network.
-        let client = crate::client::BuzzClient::new("http://127.0.0.1:9".into(), keys, None, None)
-            .expect("client construction");
+        let client = crate::client::BuzzClient::new(
+            "http://127.0.0.1:9".into(),
+            crate::credentials::Credentials::from_keys(keys),
+        )
+        .expect("client construction");
 
         let err = cmd_update(
             &client, "my-slug", None, false, // name / clear_name
@@ -1504,8 +1518,11 @@ mod tests {
 
     fn discard_client() -> crate::client::BuzzClient {
         let keys = nostr::Keys::generate();
-        crate::client::BuzzClient::new("http://127.0.0.1:9".into(), keys, None, None)
-            .expect("client construction")
+        crate::client::BuzzClient::new(
+            "http://127.0.0.1:9".into(),
+            crate::credentials::Credentials::from_keys(keys),
+        )
+        .expect("client construction")
     }
 
     /// Creating without --repo or --channel must fail locally; the default

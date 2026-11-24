@@ -180,7 +180,9 @@ pub async fn dispatch(
             let meeting = Uuid::new_v4();
             let builder = buzz_sdk::build_channel_meeting(channel, meeting, &definition)
                 .map_err(|error| CliError::Usage(error.to_string()))?;
-            let response = client.submit_event(client.sign_event(builder)?).await?;
+            let response = client
+                .submit_event(client.sign_event(builder).await?)
+                .await?;
             let response = parse_meeting_write(&response)?;
             print_create_response(&response, "meeting_id", &meeting.to_string());
             Ok(())
@@ -275,7 +277,7 @@ async fn fetch_meeting(
     organizer: Option<PublicKey>,
     strong: bool,
 ) -> Result<Event, CliError> {
-    let organizer = organizer.unwrap_or_else(|| client.keys().public_key());
+    let organizer = organizer.unwrap_or_else(|| client.public_key());
     let mut filter = serde_json::json!({
         "kinds": [KIND_CHANNEL_MEETING],
         "authors": [organizer.to_hex()],
@@ -337,7 +339,7 @@ async fn publish_definition(
         .map_err(|error| CliError::Usage(error.to_string()))?
         .custom_created_at(Timestamp::from(next_timestamp));
     let response = client
-        .submit_event(client.sign_event(builder)?)
+        .submit_event(client.sign_event(builder).await?)
         .await
         .map_err(|error| match error {
             CliError::Relay { status: 409, body } => CliError::Conflict(body),

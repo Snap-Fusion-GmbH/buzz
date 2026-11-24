@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test";
 import type { ChannelTemplate, RelayEvent } from "../../src/shared/api/types";
 import type { MockManagedAgentSeed } from "../../src/testing/e2eBridge";
 import type { ManagedWorkspaceStatus } from "../../src/shared/api/tauriManagedWorkspace";
+import { DEPRECATION_BANNER_STORAGE_KEY } from "../../src/app/deprecationBannerVisibility";
 import { FEATURE_OVERRIDES_STORAGE_KEY, PREVIEW_FEATURE_IDS } from "./features";
 
 export const TEST_IDENTITIES = {
@@ -276,6 +277,11 @@ type MockBridgeOptions = {
   /** Sequenced add-member failures. A string fails that call; null succeeds. */
   addChannelMembersErrors?: (string | null)[];
   channelMembersReadDelayMs?: number;
+  relayEntryPolicy?: {
+    requiredRelay?: string;
+    required: boolean;
+    error?: string;
+  };
   channelsReadError?: string;
   /** Reject successive mock `get_channels` calls, then resume. */
   channelsReadErrors?: (string | null)[];
@@ -291,6 +297,11 @@ type MockBridgeOptions = {
   /** Reject successive mock `join_channel` calls, then resume. */
   joinChannelErrors?: string[];
   channelsReadDelayMs?: number;
+  /**
+   * Hold the first `get_channels` read until
+   * `__BUZZ_E2E_RELEASE_CHANNELS_READ__` is called.
+   */
+  deferFirstChannelsRead?: boolean;
   /** Return not-modified for this many reads before resuming full payloads. */
   channelsNotModifiedResponses?: number;
   /** When true, a matching knownHash returns a not-modified channel payload. */
@@ -395,6 +406,9 @@ type MockBridgeOptions = {
   /** Set to false to simulate a Linux .deb install where auto-update is not
    *  supported. Defaults to true. See e2eBridge mock.autoUpdateSupported. */
   autoUpdateSupported?: boolean;
+  /** Manifest key the deprecation banner resolves its installer link with.
+   *  Defaults to none. See e2eBridge mock.newAppInstallerTarget. */
+  newAppInstallerTarget?: string;
   /** Reject browser opener calls to exercise manual pairing fallback UI. */
   openerError?: string;
   /** Delay binding signatures so specs can exercise request supersession. */
@@ -671,6 +685,12 @@ type BridgeOptions = {
    * that exercise the Experiments toggle UI itself.
    */
   seedPreviewFeatures?: boolean;
+  /**
+   * When true (default), seed the deprecation banner as just dismissed so it
+   * stays out of existing layout and visual baselines. Set to false in specs
+   * that exercise the banner itself.
+   */
+  seedDeprecationBannerDismissed?: boolean;
   user?: keyof typeof TEST_IDENTITIES;
 };
 
@@ -876,6 +896,12 @@ async function seedDefaultCommunity(
   );
 }
 
+async function seedDeprecationBannerDismissed(page: Page) {
+  await page.addInitScript((key) => {
+    window.localStorage.setItem(key, String(Date.now()));
+  }, DEPRECATION_BANNER_STORAGE_KEY);
+}
+
 async function seedPreviewFeaturesEnabled(page: Page) {
   await page.addInitScript(
     ({ key, ids }) => {
@@ -910,6 +936,9 @@ export async function installBridge(page: Page, options: BridgeOptions) {
   // Experiments toggle UI itself pass `seedPreviewFeatures: false`.
   if (options.seedPreviewFeatures !== false) {
     await seedPreviewFeaturesEnabled(page);
+  }
+  if (options.seedDeprecationBannerDismissed !== false) {
+    await seedDeprecationBannerDismissed(page);
   }
 
   await page.addInitScript(
@@ -1015,6 +1044,7 @@ export async function installMockBridge(
     skipOnboardingSeed?: boolean;
     skipCommunitySeed?: boolean;
     seedPreviewFeatures?: boolean;
+    seedDeprecationBannerDismissed?: boolean;
   },
 ) {
   await installBridge(page, {
@@ -1025,6 +1055,7 @@ export async function installMockBridge(
     skipOnboardingSeed: options?.skipOnboardingSeed,
     skipCommunitySeed: options?.skipCommunitySeed,
     seedPreviewFeatures: options?.seedPreviewFeatures,
+    seedDeprecationBannerDismissed: options?.seedDeprecationBannerDismissed,
   });
 }
 

@@ -1,14 +1,18 @@
 pub mod agents;
 pub mod channel_templates;
+pub mod channel_unread;
 pub mod channels;
 pub mod dms;
 pub mod emoji;
 pub(crate) mod event_output;
 pub mod feed;
 pub mod gifs;
+mod huddle_tracker;
+pub mod huddles;
 pub mod issues;
 pub mod meetings;
 pub mod mem;
+pub mod message_report;
 pub mod messages;
 pub mod moderation;
 pub mod notes;
@@ -17,12 +21,21 @@ pub mod patches;
 pub mod pr;
 pub mod project_channel;
 pub mod projects;
+pub mod raw;
 pub mod reactions;
+pub(crate) mod read_state;
 mod repo_default_branch;
 pub mod repos;
+pub(crate) mod sent_from_thread;
+pub mod sidebar;
+mod sidebar_doc;
+mod sidebar_flags;
+mod sidebar_sort;
+mod sidebar_sync;
 pub mod social;
 pub mod upload;
 pub mod users;
+pub(crate) mod verified_profiles;
 pub mod workflows;
 
 use crate::{client::normalize_write_response, error::CliError};
@@ -37,7 +50,7 @@ pub(crate) fn read_author_pubkeys(
         crate::validate::validate_hex64(owner)?;
         return Ok(vec![owner.to_ascii_lowercase()]);
     }
-    let mut authors = vec![client.keys().public_key().to_hex()];
+    let mut authors = vec![client.public_key().to_hex()];
     if let Some(owner) = client.auth_tag_owner_hex() {
         crate::validate::validate_hex64(&owner)?;
         let owner = owner.to_ascii_lowercase();

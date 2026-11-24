@@ -47,7 +47,9 @@ export function useChannelIntro({
 }: {
   activeChannel: Channel | null;
   addFilesLabel?: "Add files" | "Add repository";
-  onAddAgent?: (options?: { beforeSend?: () => void }) => void;
+  onAddAgent?: (options?: {
+    beforeSend?: (channelId: string) => () => void;
+  }) => void;
   onAddFiles?: () => void;
   onBrowseChannels?: () => void;
   onCreateChannel?: () => void;

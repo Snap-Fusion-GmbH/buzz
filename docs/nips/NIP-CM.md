@@ -3,8 +3,13 @@
 `draft` · `optional`
 
 Channel meetings are organizer-authored, channel-scoped addressable events of
-kind **30623**. Their recurrence is expressed in the meeting's local timezone,
+kind **30624**. Their recurrence is expressed in the meeting's local timezone,
 not as a fixed UTC cron expression.
+
+Meetings moved from kind 30623 to 30624 when upstream assigned 30623 to
+relay-signed channel pins ([NIP-PM](NIP-PM.md)). Relays and clients built
+before the move write meetings as kind 30623; those events are not read as
+meetings.
 
 ## Implemented surface
 
@@ -52,7 +57,7 @@ IPC error. Support does not imply automatic reminder delivery.
 
 ```json
 {
-  "kind": 30623,
+  "kind": 30624,
   "tags": [
     ["h", "<channel-uuid>"],
     ["d", "<channel-uuid>:<meeting-uuid>"],
@@ -65,7 +70,7 @@ IPC error. Support does not imply automatic reminder delivery.
 Exactly one two-element `h` tag and one two-element `d` tag are required. UUIDs
 use canonical lowercase hyphenated form. Binding the channel into the `d` tag
 prevents a replacement from moving a meeting to another channel. The full
-address is `(organizer pubkey, 30623, channel_uuid:meeting_uuid)`.
+address is `(organizer pubkey, 30624, channel_uuid:meeting_uuid)`.
 
 The relay applies its ordinary community boundary, channel write authorization,
 and channel read visibility. Meeting writes require `messages:write`. Existing

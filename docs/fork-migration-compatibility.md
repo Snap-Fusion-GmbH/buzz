@@ -10,7 +10,11 @@ The October 25, 2026 upstream integration retains upstream migration 68
 migration version 69. The latter is independent of migration 68 and remains an
 additive, backward-compatible column change. Its SQL is unchanged. The
 subsequent integration retains upstream migrations 69 and 70 and moves only
-`channel_join_role` to 71 to avoid the duplicate version number.
+`channel_join_role` to 71 to avoid the duplicate version number. A later
+integration moved it to 74. The November 24, 2026 integration retains upstream
+migrations 74 through 105 and moves `channel_join_role` to 106, after the last
+upstream version. No upstream migration through 105 reads `join_role`, so the
+later position is safe on fresh databases.
 
 Managed databases must continue using this fork's migration sequence. Do not
 point an upstream binary at a migrated managed database or switch an upstream
@@ -18,5 +22,5 @@ database to this fork without reviewing its recorded migration versions and
 checksums first. No existing migration records are rewritten by this
 integration.
 
-The embedded-migrator regression test checks the retained version 67, versions
-68 and 69, and strictly increasing migration versions.
+The embedded-migrator regression test checks the retained version 67, the
+contiguous upstream sequence, and `channel_join_role` at version 106.

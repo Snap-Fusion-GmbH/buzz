@@ -41,7 +41,13 @@ async fn reader_fixture(
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    let client = BuzzClient::new(format!("http://{address}"), keys, tag, tag_json).unwrap();
+    let client = {
+        let mut credentials = crate::credentials::Credentials::from_keys(keys);
+        if let (Some(tag), Some(json)) = (tag, tag_json) {
+            credentials = credentials.with_auth_tag(tag, json);
+        }
+        BuzzClient::new(format!("http://{address}"), credentials).unwrap()
+    };
     (client, owner, receiver, server)
 }
 
@@ -58,7 +64,7 @@ async fn default_project_list_queries_the_agent_and_its_attested_owner() {
     assert_eq!(query["kinds"], serde_json::json!([30621]));
     assert_eq!(
         query["authors"],
-        serde_json::json!([client.keys().public_key().to_hex(), owner]),
+        serde_json::json!([client.public_key().to_hex(), owner]),
     );
     assert_eq!(query["limit"], 7);
 }
@@ -113,7 +119,7 @@ async fn explicit_owner_and_human_reads_do_not_expand_the_author_scope() {
             serde_json::json!([if delegated {
                 owner
             } else {
-                client.keys().public_key().to_hex()
+                client.public_key().to_hex()
             }])
         );
         server.abort();
@@ -130,7 +136,7 @@ async fn repository_listing_is_owner_aware_but_project_write_lookup_is_still_sel
     assert_eq!(query[0]["kinds"], serde_json::json!([30617]));
     assert_eq!(
         query[0]["authors"],
-        serde_json::json!([client.keys().public_key().to_hex(), owner])
+        serde_json::json!([client.public_key().to_hex(), owner])
     );
     server.abort();
 
@@ -142,7 +148,7 @@ async fn repository_listing_is_owner_aware_but_project_write_lookup_is_still_sel
     let query = request.await.unwrap();
     assert_eq!(
         query[0]["authors"],
-        serde_json::json!([client.keys().public_key().to_hex()])
+        serde_json::json!([client.public_key().to_hex()])
     );
     server.abort();
 }

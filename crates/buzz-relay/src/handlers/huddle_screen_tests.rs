@@ -30,6 +30,7 @@ fn connection(keys: &Keys) -> Arc<ConnectionState> {
         session_deadline: None,
         nip_fi_gate: crate::nip_fi_gate::SessionAdmissionGate::off_mode(cancel.clone()),
         community_control: crate::state::CommunityConnectionControl::new(cancel),
+        refusal_budget: Default::default(),
     })
 }
 

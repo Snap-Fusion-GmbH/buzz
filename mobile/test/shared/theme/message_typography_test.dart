@@ -20,10 +20,10 @@ void main() {
   test('message typography matches the shared mobile scale', () {
     expectStyle(
       messageBodyTextStyle,
-      fontSize: 15,
+      fontSize: 17,
       fontWeight: FontWeight.w400,
-      lineHeight: 20,
-      letterSpacing: 0,
+      lineHeight: 23,
+      letterSpacing: -0.45,
     );
     expectStyle(
       messageUsernameTextStyle,
@@ -44,13 +44,6 @@ void main() {
       lessThan(messageUsernameTextStyle.fontSize!),
     );
     expectStyle(
-      replyPreviewTextStyle,
-      fontSize: 13.1,
-      fontWeight: FontWeight.w400,
-      lineHeight: 17,
-      letterSpacing: 0,
-    );
-    expectStyle(
       reactionCountTextStyle,
       fontSize: 13.1,
       fontWeight: FontWeight.w500,
@@ -60,22 +53,8 @@ void main() {
     expectStyle(
       channelTitleTextStyle,
       fontSize: 20,
-      fontWeight: FontWeight.w700,
-      lineHeight: 24,
-      letterSpacing: 0,
-    );
-    expectStyle(
-      systemMessageHeadingTextStyle,
-      fontSize: 15,
-      fontWeight: FontWeight.w600,
-      lineHeight: 17,
-      letterSpacing: 0,
-    );
-    expectStyle(
-      systemMessageBodyTextStyle,
-      fontSize: 15,
-      fontWeight: FontWeight.w400,
-      lineHeight: 20,
+      fontWeight: FontWeight.w500,
+      lineHeight: 26,
       letterSpacing: 0,
     );
   });
@@ -104,7 +83,7 @@ void main() {
     );
     expectStyle(
       activityPreviewTextStyle,
-      fontSize: 15,
+      fontSize: 16,
       fontWeight: FontWeight.w400,
       lineHeight: 20,
       letterSpacing: 0,
@@ -127,13 +106,6 @@ void main() {
       letterSpacing: 0,
     );
     expectStyle(
-      contentListTimestampTextStyle,
-      fontSize: 15,
-      fontWeight: FontWeight.w400,
-      lineHeight: 17,
-      letterSpacing: 0,
-    );
-    expectStyle(
       filterChipTextStyle,
       fontSize: 15,
       fontWeight: FontWeight.w400,
@@ -143,7 +115,7 @@ void main() {
   });
 
   test('message and activity avatars use their surface sizes', () {
-    expect(messageAvatarSize, 42);
+    expect(messageAvatarSize, 36);
     expect(activityAvatarSize, 42);
     expect(compactMessageAvatarSize, 42);
     expect(messageAvatarContentGap, Grid.twelve);

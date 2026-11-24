@@ -15,125 +15,192 @@ class _MeRetry extends StatelessWidget {
   );
 }
 
-Future<String?> _name(
+/// Opens the list-row action popover and clears the matching pane when requested.
+Future<bool?> openConversationListDetails(
   BuildContext context,
-  String title, {
-  String initialValue = '',
+  Channel channel,
+  String? viewer, {
+  required bool personal,
+  bool isUnread = false,
+  String? sectionId,
+  ConversationMenuSession? nativeSession,
 }) async {
-  if (defaultTargetPlatform == TargetPlatform.iOS) {
-    final theme = utilitySurfaceThemeData(Theme.of(context));
-    try {
-      return await const MethodChannel(
-        'buzz/profile_text_editor',
-      ).invokeMethod<String>('presentProject', {
-        'title': title,
-        'initialValue': initialValue,
-        'placeholder': 'Project name',
-        'multiline': false,
-        'brightness': theme.brightness.name,
-        'pageBackgroundArgb': theme.colorScheme.surface.toARGB32(),
-        'containerBackgroundArgb': theme.colorScheme.surfaceContainerHighest
-            .toARGB32(),
-        'containerCornerRadius': Radii.container,
-      });
-    } on MissingPluginException {
-      // Use the shared sheet when the native editor is unavailable.
-    }
-  }
-  if (!context.mounted) return null;
-  return showBuzzModalBottomSheet<String>(
-    context: context,
-    title: title,
-    isScrollControlled: true,
-    requestFocus: true,
-    builder: (_) => _NewMeProject(initialValue: initialValue),
+  final pane = ConversationPaneScope.maybeOf(context);
+  final result = await showConversationPopover(
+    anchorContext: context,
+    channel: channel,
+    viewer: viewer,
+    personal: personal,
+    isUnread: isUnread,
+    sectionId: sectionId,
+    nativeSession: nativeSession,
   );
+  if (result == true && context.mounted && pane?.selectedId == channel.id) {
+    pane!.clear();
+  }
+  return result;
 }
 
-class _NewMeProject extends HookConsumerWidget {
-  final String initialValue;
-  const _NewMeProject({this.initialValue = ''});
+/// A Solo chat row. It opens as a personal chat in whichever sidebar
+/// section the chat is filed.
+class SoloChatTile extends ConsumerWidget {
+  const SoloChatTile({super.key, required this.channel, this.onTap});
+  final VoidCallback? onTap;
+  final Channel channel;
+
+  static void showActions(
+    BuildContext context,
+    Channel channel,
+    String? viewer,
+  ) => showChannelDetailsSheet(
+    context: context,
+    channel: channel,
+    currentPubkey: viewer,
+    personalChat: true,
+  );
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final controller = useTextEditingController(text: initialValue);
-    useListenable(controller);
-    final name = controller.text.trim();
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-        Grid.gutter,
-        Grid.md,
-        Grid.gutter,
-        MediaQuery.viewInsetsOf(context).bottom + Grid.gutter,
+    final viewer = ref.watch(myPubkeyProvider);
+    final legacyChannels = ref.watch(
+      meGroupsProvider.select((g) => g.value?.channels ?? const <String>[]),
+    );
+    final isUnread = ref.watch(
+      meUnreadChannelIdsProvider.select((ids) => ids.contains(channel.id)),
+    );
+    final pane = ConversationPaneScope.maybeOf(context);
+    final selected = pane?.selectedId == channel.id;
+    return IosConversationMenuRow(
+      onMenu: (session) => openConversationListDetails(
+        context,
+        channel,
+        viewer,
+        personal: channel.isPersonalChat(viewer, legacyChannels),
+        isUnread: isUnread,
+        nativeSession: session,
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          TextField(
-            controller: controller,
-            autofocus: true,
-            maxLength: 120,
-            decoration: const InputDecoration(labelText: 'Project name'),
-          ),
-          const SizedBox(height: Grid.md),
-          FilledButton(
-            onPressed: name.isEmpty ? null : () => Navigator.pop(context, name),
-            child: const Text('Create project'),
-          ),
-        ],
+      child: markMessagesRow(
+        context,
+        Stack(
+          children: [
+            if (selected)
+              Positioned.fill(
+                left: MessagesSectionOptions.leadingInset(context) - Grid.xxs,
+                right: Grid.gutter - Grid.xxs,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: context.colors.primaryContainer,
+                    borderRadius: BorderRadius.circular(Radii.container),
+                  ),
+                ),
+              ),
+            Semantics(
+              selected: selected,
+              child: _MeChatRow(
+                channelId: channel.id,
+                name: channel.name,
+                isUnread: isUnread,
+                onLongPress: () => openConversationListDetails(
+                  context,
+                  channel,
+                  viewer,
+                  personal: channel.isPersonalChat(viewer, legacyChannels),
+                  isUnread: isUnread,
+                ),
+                onTap:
+                    onTap ??
+                    () => openConversationPane(
+                      context,
+                      channel.id,
+                      (_) => ChannelDetailPage(
+                        channel: channel,
+                        personalChat: channel.isPersonalChat(
+                          viewer,
+                          legacyChannels,
+                        ),
+                      ),
+                    ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-class _MeChatRow extends StatelessWidget {
+class _MeChatRow extends ConsumerWidget {
   const _MeChatRow({
+    required this.channelId,
     required this.name,
     required this.onTap,
+    required this.onLongPress,
     required this.isUnread,
   });
+  final String channelId;
   final String name;
   final bool isUnread;
   final VoidCallback onTap;
+  final VoidCallback onLongPress;
 
   @override
-  Widget build(BuildContext context) {
-    final color = navigationPrimaryForeground(
-      context,
-    ).withValues(alpha: isUnread ? 1 : 0.8);
+  Widget build(BuildContext context, WidgetRef ref) {
+    final color = channelNavigationForeground(context, unread: isUnread);
+    final working = ref.watch(meWorkingAgentsProvider(channelId));
+    final status = working.isEmpty ? '' : ', ${working.join(', ')} working';
     return Semantics(
-      label: isUnread ? '$name, unread' : name,
+      label: '${isUnread ? '$name, unread' : name}$status',
       onTap: onTap,
+      onLongPress: onLongPress,
       excludeSemantics: true,
       button: true,
       child: InkWell(
-        borderRadius: BorderRadius.circular(Radii.md),
+        borderRadius: BorderRadius.circular(Radii.container),
         onTap: onTap,
+        onLongPress: usesIosConversationMenu ? null : onLongPress,
         child: Padding(
-          padding: const EdgeInsets.symmetric(
-            horizontal: Grid.xxs,
-            vertical: Grid.twelve,
+          padding: EdgeInsets.fromLTRB(
+            MessagesSectionOptions.leadingInset(context),
+            Grid.inventoryRowInset,
+            Grid.gutter + Grid.half,
+            Grid.inventoryRowInset,
           ),
           child: Row(
             children: [
               SizedBox(
-                width: 22,
+                width: Grid.inventoryIconSize,
                 child: Align(
                   alignment: Alignment.centerLeft,
-                  child: Icon(BuzzIcons.messageCircle, size: 18, color: color),
+                  child: Icon(
+                    BuzzIcons.messageCircle,
+                    size: Grid.inventoryIconSize,
+                    color: navigationRowIconForeground(context),
+                  ),
                 ),
               ),
-              const SizedBox(width: Grid.xxs),
+              const SizedBox(width: Grid.inventoryLabelGap),
               Expanded(
                 child: Text(
                   name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: contentListTitleTextStyle.copyWith(
+                  style: navigationChatTitleTextStyle.copyWith(
                     color: color,
-                    fontWeight: isUnread ? FontWeight.w700 : FontWeight.w400,
-                    fontSize: 17,
-                    height: 22 / 17,
+                    fontWeight: isUnread ? FontWeight.w600 : FontWeight.w500,
+                  ),
+                ),
+              ),
+              SizedBox(
+                width: Grid.inventoryAccessoryWidth,
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: SizedBox(
+                    width: 20,
+                    child: Center(
+                      child: working.isEmpty
+                          ? null
+                          : SoloWorkingDots(color: color),
+                    ),
                   ),
                 ),
               ),
@@ -145,31 +212,6 @@ class _MeChatRow extends StatelessWidget {
   }
 }
 
-Future<void> _offerMeRecovery(BuildContext context, MeSync sync) async {
-  final pending = sync.prefs?.getString(sync.pendingKey);
-  if (pending == null) return;
-  final discard = await showDialog<bool>(
-    context: context,
-    builder: (context) => AlertDialog(
-      title: const Text('Conflicting Solo changes'),
-      content: const Text(
-        'Desktop and this phone changed the same project or chat. Keep the pending phone change to retry later, or discard it and use the current desktop organization. Your chat messages will be kept.',
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context, false),
-          child: const Text('Keep pending'),
-        ),
-        TextButton(
-          onPressed: () => Navigator.pop(context, true),
-          child: const Text('Discard phone change'),
-        ),
-      ],
-    ),
-  );
-  if (discard == true) await sync.discardPending(pending);
-}
-
 // Reconnects replace the transport service while an editor may still be open.
 // Retain the reviewed account/community boundary but use its current connection.
 MeSync _currentMeSync(WidgetRef ref, MeSync reviewed) {
@@ -179,4 +221,26 @@ MeSync _currentMeSync(WidgetRef ref, MeSync reviewed) {
     throw StateError('Your account or community changed. Open Solo again.');
   }
   return current;
+}
+
+class _MeSectionEmpty extends StatelessWidget {
+  const _MeSectionEmpty(this.label);
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(
+      horizontal: Grid.xxs * 2,
+      vertical: Grid.half,
+    ),
+    child: Align(
+      alignment: Alignment.centerLeft,
+      child: Text(
+        label,
+        style: contentListBodyTextStyle.copyWith(
+          color: context.colors.onSurfaceVariant,
+        ),
+      ),
+    ),
+  );
 }

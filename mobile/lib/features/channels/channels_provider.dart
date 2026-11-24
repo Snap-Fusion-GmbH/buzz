@@ -1,13 +1,15 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:math';
 
-import 'package:flutter/widgets.dart';
 import 'package:flutter/foundation.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../shared/relay/relay.dart';
 import '../../shared/channels/channel_list_snapshot.dart';
+import '../../shared/channels/open_channel_directory_storage.dart';
+import '../../shared/channels/saved_message_store.dart';
 import '../../shared/theme/theme_provider.dart';
 import '../../shared/utils/string_utils.dart';
 import 'channel.dart';
@@ -15,17 +17,28 @@ import 'channel_management_provider.dart'
     show ChannelMember, channelDetailsProvider;
 import 'channel_mutes/channel_mutes_provider.dart';
 import 'huddle_channel_filter.dart';
+import 'saved_channel_page.dart';
 import '../../shared/read_state/read_state_provider.dart';
+import '../../shared/read_state/read_state_time.dart';
 import '../../shared/profile/user_cache_provider.dart';
 import 'thread_follows/thread_follows_provider.dart';
 import 'unread_badge/is_high_priority_event.dart';
+import '../../shared/agents/is_quiet_agent_message.dart';
 import 'unread_badge/observed_unread_event.dart';
 import 'unread_badge/should_notify_for_event.dart';
 
 part 'channel_directory.dart';
+part 'huddle_creation_receipts.dart';
+part 'channel_lookup.dart';
+part 'channel_unread_deletions.dart';
+part 'channel_unread_catch_up.dart';
 part 'channel_snapshot.dart';
 part 'channel_member_snapshots.dart';
+part 'channel_history_evidence.dart';
 part 'channels_provider_lifecycle.dart';
+part 'channel_list_changes.dart';
+part 'channels_provider_joins.dart';
+part 'channel_thread_follows.dart';
 
 const _channelTypeOrder = {'stream': 0, 'forum': 1, 'dm': 2};
 const _unreadCatchUpLimit = 1000;
@@ -46,7 +59,12 @@ const _authoredRootIdsPrefix = 'buzz-thread-authored.v1';
 /// for any visible channel event kind. Chunks stay within the relay's explicit
 /// channel cap and incoming events bump `lastMessageAt` for their channel.
 class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
-  static const _backstopInterval = Duration(seconds: 60);
+  // A list read waits this long after the latest event that may have
+  // changed the list, and no longer than [_listReadMaxWait] after the first.
+  // Reads start at least [_listReadMinGap] apart.
+  static const _listReadQuiet = Duration(seconds: 2);
+  static const _listReadMaxWait = Duration(seconds: 10);
+  static const _listReadMinGap = Duration(seconds: 10);
 
   final Map<String, _LiveChunkSubscription> _liveSubscriptionsByChunk = {};
   Future<void> _liveSubscriptionQueue = Future.value();
@@ -56,12 +74,60 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
   Set<String> _desiredLiveChannelIds = const {};
   int _subscriptionVersion = 0;
   int _nextLiveChunkGeneration = 0;
+  // Closed by the relay for capacity, so retried with backoff.
   final Set<String> _terminallyClosedLiveChunks = {};
+  // This client's own confirmed joins and removals that replicas may lag.
+  final Set<String> _confirmedJoins = {}, _confirmedRemovals = {};
+  // Refused for good, so left alone until the next connection.
+  final Set<String> _refusedLiveChunks = {};
   String? _subscriptionRelayBaseUrl;
-  Timer? _backstopTimer;
+  // The refresh whose channels the live chunks currently cover.
+  _ChannelRefreshFence? _liveFence;
+  // Live events that may have changed the channel list, and how many of them
+  // the last completed read covered. See [_ChannelListChanges].
+  int _channelListChanges = 0;
+  int _channelListChangesRead = 0;
+  Timer? _listReadQuietTimer;
+  Timer? _listReadDeadline;
+  Timer? _listReadGap;
+  bool _listReadDueAfterGap = false;
+  final _listReadRetry = _Backoff();
+  // Its own backoff: the list read that retries a catch-up can succeed and
+  // restart [_listReadRetry] while the catch-up keeps failing.
+  final _unreadCatchUpRetry = _Backoff();
+  void Function()? _listNoticesUnsubscribe;
+  bool _listNoticesSubscribed = false;
+  // Refused for good, so left alone until the next connection.
+  bool _listNoticesRefused = false;
+  // Closed by the relay and being reopened by RelaySession itself.
+  bool _listNoticesInterrupted = false;
+  int _listNoticesGeneration = 0;
+  final _listNoticesRetry = _Backoff();
+  final _liveChunksRetry = _Backoff();
+  // Reopened by a retry since the last list read was due.
+  bool _listNoticesReopened = false;
+  final Set<String> _reopenedLiveChunks = {};
   final Map<String, int> _latestObservedByChannel = {};
+  final Map<String, int> _activityRevisions = {};
+  // A present entry with a null event is a successful empty history response.
+  final _filterEvidence = <String, ({NostrEvent? event})>{};
+  ({NostrEvent? event})? filterEvidenceFor(String id) => _filterEvidence[id];
+
+  /// Invalidates verified activity reads for every live message, including
+  /// self-authored or muted messages, without changing unread or sort state.
+  int activityRevisionFor(String channelId) =>
+      _activityRevisions[channelId] ?? 0;
+
+  // Per channel, when an earlier unread catch-up in this session was sent, and
+  // the read timestamp and mute state it used. See [_UnreadCatchUp].
+  final Map<String, ({int sentAt, int? readAt, bool muted})>
+  _unreadCaughtUpByChannel = {};
   final Map<String, Map<String, ObservedUnreadEvent>>
   _observedUnreadEventsByChannel = {};
+  // Touched wherever the two maps above change; highlights memoize on it.
+  final _observedUnreadRevisions = ObservedUnreadRevisions();
+  final Map<String, Set<String>> _unreadDeletedIdsByChannel = {};
+  final Set<String> _unscopedUnreadDeletedIds = {};
   Set<String> _participatedRootIds = {};
   Set<String> _authoredRootIds = {};
   String? _threadInterestPubkey;
@@ -75,16 +141,25 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
   String? _memberSnapshotRelayBaseUrl;
   String? _memberSnapshotPubkey;
   Map<String, List<ChannelMember>> _memberSnapshotsByChannelId = const {};
+  bool _hasAuthoritativeMemberships = false;
   List<NostrEvent> _directoryMetas = const [];
+  // The scope and read times of [_directoryMetas]; a switch resets them.
+  final _savedDirectory = _SavedDirectory();
   Set<String> _hiddenDmIds = const {};
+  final Set<String> _verifiedHuddleIds = {};
+  final Set<String> _checkedHuddleReceiptIds = {};
+  bool _huddleReceiptsReading = false;
+  List<ChannelData>? _pendingHuddleReceiptMetadata;
 
   /// Fences directory responses to the relay and identity that requested them.
   late final _ChannelRefreshCoordinator _refreshCoordinator =
       _ChannelRefreshCoordinator.forRef(ref);
 
-  // Expose the notifier's protected Ref only to same-library extensions used to
-  // keep lifecycle code below the file-size ratchet.
+  // Expose the notifier's protected Ref and state only to same-library
+  // extensions used to keep code below the file-size ratchet.
   Ref get _lifecycleRef => ref;
+  AsyncValue<List<Channel>> get _listState => state;
+  set _listState(AsyncValue<List<Channel>> value) => state = value;
 
   /// The member snapshot already returned while loading the channel list.
   ///
@@ -97,6 +172,19 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
       Map.unmodifiable(_latestObservedByChannel);
 
   Set<String> get hiddenDmIds => Set.unmodifiable(_hiddenDmIds);
+
+  /// Keeps [channel], opened before this list has it, findable by
+  /// [channelById] and [channelByIdProvider] until the list has it.
+  void rememberOpened(Channel channel) {
+    // The open's background refresh may have listed it already.
+    if (state.value?.any((listed) => listed.id == channel.id) ?? false) return;
+    ref.read(_openedAheadProvider.notifier).remember(channel);
+  }
+
+  /// [channelId] from the list, else as it was opened ahead of the list.
+  Channel? channelById(String channelId) =>
+      state.value?.where((channel) => channel.id == channelId).firstOrNull ??
+      ref.read(_openedAheadProvider)[channelId];
 
   bool get hasLoaded => _hasLoaded;
 
@@ -135,15 +223,16 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
   }
 
   Map<String, Map<String, ObservedUnreadEvent>>
-  get observedUnreadEventsByChannel =>
-      Map<String, Map<String, ObservedUnreadEvent>>.unmodifiable({
-        for (final entry in _observedUnreadEventsByChannel.entries)
-          entry.key: Map<String, ObservedUnreadEvent>.unmodifiable(entry.value),
-      });
+  get observedUnreadEventsByChannel => ObservedUnreadSnapshot({
+    for (final entry in _observedUnreadEventsByChannel.entries)
+      entry.key: UnmodifiableMapView(entry.value),
+  }, _observedUnreadRevisions.of);
 
   @override
   Future<List<Channel>> build() async {
     final buildGeneration = ++_buildGeneration;
+    _huddleReceiptsReading = false;
+    _pendingHuddleReceiptMetadata = null;
     _backgroundRefreshInFlight = false;
     _backgroundRefreshQueued = false;
     _refreshCoordinator.retireInFlight();
@@ -159,16 +248,26 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
       _memberSnapshotRelayBaseUrl = relayBaseUrl;
       _memberSnapshotPubkey = pubkey;
       _memberSnapshotsByChannelId = const {};
+      _hasAuthoritativeMemberships = false;
       _directoryMetas = const [];
+      _savedDirectory.reset();
       _hiddenDmIds = const {};
+      _verifiedHuddleIds.clear();
+      _checkedHuddleReceiptIds.clear();
+      _forgetConfirmedMemberships();
       // Retire any in-flight directory request: its response describes the
       // previous relay or identity and must not reach this scope's state.
-      _refreshCoordinator.retireInFlight();
+      _refreshCoordinator.retireScope();
     }
     final snapshot =
         (_hasLoaded ? state.value : null) ??
         _restoreSnapshot(pubkey, relayBaseUrl);
     if (snapshot != null) _hasCachedSnapshot = true;
+    listenSelf((_, next) {
+      final listed = next.value;
+      if (listed == null || !ref.exists(_openedAheadProvider)) return;
+      ref.read(_openedAheadProvider.notifier).dropListed(listed);
+    });
     _saveSnapshot = pubkey == null
         ? null
         : _captureSnapshotWriter(pubkey, relayBaseUrl);
@@ -179,21 +278,35 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
         sessionState.status != SessionStatus.connected;
     ref.listen(relaySessionProvider, (previous, next) {
       if (next.status != SessionStatus.connected) return;
-      if (previous?.status != SessionStatus.connected) connectionVersion++;
+      if (previous?.status != SessionStatus.connected) {
+        connectionVersion++;
+        _checkSavedDirectoryOnConnect();
+      }
       if (waitingForInitialConnection && !connected.isCompleted) {
         connected.complete();
       } else if (previous?.status != SessionStatus.connected) {
-        // A new authenticated connection can change relay admission policy.
-        // Ordinary refreshes must not retry an unchanged terminal rejection.
+        // A new authenticated connection can change relay admission policy,
+        // so this refresh retries anything refused at once, and any later
+        // refusal backs off afresh.
         _terminallyClosedLiveChunks.clear();
+        _refusedLiveChunks.clear();
+        _liveChunksRetry.cancel();
+        _listNoticesRetry.cancel();
+        if (_listNoticesRefused) {
+          _listNoticesRefused = false;
+          _listNoticesSubscribed = false;
+        }
+        // Live events sent while disconnected are not replayed, so the list
+        // may have changed. Counting that lets a failed read be retried.
+        _channelListChanges++;
         unawaited(_refreshInBackground(queueIfBusy: true));
       }
     });
 
     // Re-fetch when the app returns to foreground so channels created on
     // another device while mobile was backgrounded appear immediately.
-    ref.listen(appLifecycleProvider, (prev, next) {
-      if (next != AppLifecycleState.resumed) return;
+    ref.listen(appForegroundProvider, (_, foreground) {
+      if (!foreground) return;
       // Resume is published before the session hears it. Let the session
       // decide first: one that reconnects reconciles when it connects, so
       // refreshing here too would fetch the same list twice.
@@ -203,7 +316,18 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
         // A fast reconnect may already have reconciled before this callback.
         if (connectionVersion == versionBeforeResume &&
             ref.read(relaySessionProvider).status == SessionStatus.connected) {
-          refresh();
+          // As for a reconnect, a failed read is retried.
+          final changes = ++_channelListChanges;
+          final generation = _buildGeneration;
+          unawaited(
+            refresh().then((_) {
+              if (ref.mounted &&
+                  generation == _buildGeneration &&
+                  _channelListChangesRead < changes) {
+                _listReadRetry.schedule(_readListIfChanged);
+              }
+            }),
+          );
         }
       });
     });
@@ -213,18 +337,23 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
       _refreshCoordinator.retireInFlight();
       _clearLiveSubscriptions();
       _latestObservedByChannel.clear();
+      _activityRevisions.clear();
+      _filterEvidence.clear();
       _observedUnreadEventsByChannel.clear();
-      _backstopTimer?.cancel();
-      _backstopTimer = null;
+      _observedUnreadRevisions.touchAll();
+      _unreadCaughtUpByChannel.clear();
+      _unreadDeletedIdsByChannel.clear();
+      _unscopedUnreadDeletedIds.clear();
+      _cancelListRead();
     });
 
     if (snapshot != null) {
-      _startBackstopTimer();
       // Install local data before starting work that can notify listeners.
       unawaited(
         Future<void>.microtask(() async {
           if (waitingForInitialConnection) await connected.future;
           if (!ref.mounted || buildGeneration != _buildGeneration) return;
+          _listenThreadFollows();
           await _refreshInBackground();
         }),
       );
@@ -238,7 +367,16 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
       throw const _StaleChannelRefresh();
     }
 
-    return _fetch(subscribeLive: true);
+    final channels = await _fetch(subscribeLive: true);
+    if (ref.mounted) _listenThreadFollows();
+    // As on resume, a failed part of the cold read (such as hidden DMs) is
+    // retried.
+    if (ref.mounted &&
+        buildGeneration == _buildGeneration &&
+        _channelListChangesRead < _channelListChanges) {
+      _listReadRetry.schedule(_readListIfChanged);
+    }
+    return channels;
   }
 
   Future<List<Channel>> _fetch({
@@ -274,11 +412,13 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
       fetchesDirectory: fetchDirectory,
     );
 
+    // Notices from here on arrive live, so this read covers everything before.
+    unawaited(_subscribeChannelListNotices(myPk));
+    // Live changes from here on may not be in this read.
+    final listChanges = _channelListChanges;
+
     // Step 1: find the channels I'm a member of via kind:39002.
-    final memberships = _latestChannelEvents(
-      await _fenced(fence, _fetchChannelMemberships(session, myPk)),
-      kind: 39002,
-    );
+    final memberships = await _readMemberships(fence, session, myPk);
     final memberChannelIds = memberships
         .map((e) => e.getTagValue('d'))
         .whereType<String>()
@@ -321,9 +461,10 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
     // private channels and DMs below so discovery fails closed if that contract
     // ever regresses. The composite cursor preserves tied-timestamp rows.
     if (fetchDirectory) {
-      final metas = await _refreshCoordinator.loadDirectory(session, fence);
-      if (metas != null) _directoryMetas = metas;
+      final read = await _refreshCoordinator.loadDirectory(session, fence);
+      if (read != null) _installFullRead(read, fence.scope);
     }
+    final directoryMetas = _directoryMetas;
 
     // Merge and dedupe by `d` tag. Kind:39000 is parameterized-replaceable,
     // but stale revisions from before the relay's d_tag backfill can linger.
@@ -337,6 +478,8 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
     // Membership discovery already returned the full authoritative rosters.
     // Their owner roles validate Huddle links without downloading them again.
     final huddleBackingIds = huddleBackingChannelIds(huddleStarts, memberships);
+    huddleBackingIds.addAll(_verifiedHuddleIds);
+    final hiddenDms = hiddenDmIds ?? _hiddenDmIds;
     final visibleMetas = parsedMetas.entries.where((entry) {
       final data = entry.value;
       final isMember = memberChannelIds.contains(data.id);
@@ -344,7 +487,16 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
           (data.visibility == 'private' || data.channelType == 'dm')) {
         return false;
       }
-      if (data.channelType == 'dm' && hiddenDmIds.contains(data.id)) {
+      if (data.channelType == 'dm' && hiddenDms.contains(data.id)) {
+        return false;
+      }
+      if (isGeneratedHuddleChannel(
+        id: data.id,
+        name: data.name,
+        channelType: data.channelType,
+        visibility: data.visibility,
+        ttlSeconds: data.ttlSeconds,
+      )) {
         return false;
       }
       return !(huddleBackingIds.contains(data.id) &&
@@ -364,14 +516,27 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
     );
     // Latest-message filters depend on channel identity/privacy, not names.
     // Start them alongside profiles, and observe both errors immediately.
-    final latestEventsRequest = fetchLastMessage
-        ? _fetchLastMessageEvents(session, [
-            for (final entry in visibleMetas)
-              if (memberChannelIds.contains(entry.value.id) &&
-                  !entry.value.isArchived)
-                entry.value,
-          ])
-        : Future.value(const <NostrEvent>[]);
+    final listed = {
+      if (!fetchLastMessage)
+        for (final c in state.value ?? const <Channel>[])
+          if (c.isMember) c.id,
+    };
+    final requestedHistory = [
+      for (final entry in visibleMetas)
+        if (memberChannelIds.contains(entry.value.id) &&
+            !entry.value.isArchived &&
+            !listed.contains(entry.value.id))
+          entry.value,
+    ];
+    final initialRevisions = {
+      for (final c in requestedHistory) c.id: activityRevisionFor(c.id),
+    };
+    final failedHistory = <String>{};
+    final latestEventsRequest = _fetchLastMessageEvents(
+      session,
+      requestedHistory,
+      failedHistory,
+    );
     final (displayNames, latestEvents) = await _fenced(fence, () async {
       await Future.wait(eagerError: true, [
         displayNamesRequest,
@@ -382,7 +547,10 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
     // Name resolution may return without a fenced read; check before writing.
     fence.ensureCurrent();
     _cacheMemberSnapshots(memberships, replaceAll: true);
-    _hiddenDmIds = Set.unmodifiable(hiddenDmIds);
+    _hasAuthoritativeMemberships = true;
+    // Without the hidden-DM response, keep the DMs hidden before. The read is
+    // then incomplete, so it stays counted as unread and is retried.
+    if (hiddenDmIds != null) _hiddenDmIds = Set.unmodifiable(hiddenDmIds);
 
     final channels = <Channel>[];
     for (final entry in visibleMetas) {
@@ -413,71 +581,73 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
 
     // Step 3: fetch the most recent message per channel to populate lastMessageAt.
     // kind:39000 metadata doesn't carry message timestamps, so channels load with
-    // lastMessageAt: null. Without this, unread detection and badge computation
-    // see every channel as having no messages. Skipped on backstop refreshes since
-    // live subscriptions keep lastMessageAt current after the initial load.
-    if (fetchLastMessage) {
-      final activeChannels = [
-        for (final channel in channels)
-          if (channel.isMember && !channel.isArchived) channel,
-      ];
-      final channelById = {
-        for (final channel in activeChannels) channel.id: channel,
-      };
-      final events = latestEvents;
-      final lastMessageMap = <String, int>{};
-      // An unavailable batch keeps the timestamps already known rather than
-      // installing channels whose latest message looks absent.
-      if (events == null) {
-        for (final channel in state.value ?? const <Channel>[]) {
-          final at = channel.lastMessageAt;
-          if (at != null) {
-            lastMessageMap[channel.id] = at.millisecondsSinceEpoch ~/ 1000;
-          }
-        }
-      }
-      final mutedChannelIds = _mutedChannelIds();
-      for (final event in events ?? const <NostrEvent>[]) {
-        final channelId = event.channelId;
-        if (channelId == null) continue;
-        final channel = channelById[channelId];
-        if (channel == null) continue;
-        if (!channel.isDm &&
-            !shouldNotifyForEvent(
-              event,
-              myPk,
-              mutedChannelIds: mutedChannelIds,
-              channelId: channelId,
-            )) {
-          continue;
-        }
-        final current = lastMessageMap[channelId];
-        if (current == null || event.createdAt > current) {
-          lastMessageMap[channelId] = event.createdAt;
-        }
-      }
-
-      for (var i = 0; i < channels.length; i++) {
-        final ts = lastMessageMap[channels[i].id];
-        if (ts != null) {
-          channels[i] = channels[i].copyWith(
-            lastMessageAt: DateTime.fromMillisecondsSinceEpoch(
-              ts * 1000,
-              isUtc: true,
-            ),
-          );
+    // lastMessageAt: null. Reads that keep the list's times fetch only newly
+    // listed channels; live delivery keeps the rest current.
+    final activeChannels = [
+      for (final channel in channels)
+        if (channel.isMember && !channel.isArchived) channel,
+    ];
+    final channelById = {
+      for (final channel in activeChannels) channel.id: channel,
+    };
+    final events = latestEvents;
+    if (events != null) {
+      _cacheFilterEvidence(
+        events,
+        requestedHistory,
+        failedHistory,
+        initialRevisions,
+      );
+    }
+    final lastMessageMap = <String, int>{};
+    // An unavailable batch keeps the timestamps already known rather than
+    // installing channels whose latest message looks absent.
+    if (events == null) {
+      for (final channel in state.value ?? const <Channel>[]) {
+        final at = channel.lastMessageAt;
+        if (at != null) {
+          lastMessageMap[channel.id] = at.millisecondsSinceEpoch ~/ 1000;
         }
       }
     }
+    final mutedChannelIds = _mutedChannelIds();
+    for (final event in events ?? const <NostrEvent>[]) {
+      final channelId = event.channelId;
+      if (channelId == null) continue;
+      final channel = channelById[channelId];
+      if (channel == null) continue;
+      if (!channel.isDm &&
+          !shouldNotifyForEvent(
+            event,
+            myPk,
+            mutedChannelIds: mutedChannelIds,
+            channelId: channelId,
+          )) {
+        continue;
+      }
+      final current = lastMessageMap[channelId];
+      if (current == null || event.createdAt > current) {
+        lastMessageMap[channelId] = event.createdAt;
+      }
+    }
 
-    channels.sort((left, right) {
-      final typeOrder =
-          (_channelTypeOrder[left.channelType] ?? 99) -
-          (_channelTypeOrder[right.channelType] ?? 99);
-      if (typeOrder != 0) return typeOrder;
-      // Case-insensitive to match desktop's `localeCompare` ordering.
-      return left.name.toLowerCase().compareTo(right.name.toLowerCase());
-    });
+    for (var i = 0; i < channels.length; i++) {
+      final ts = lastMessageMap[channels[i].id];
+      if (ts != null) {
+        channels[i] = channels[i].copyWith(
+          lastMessageAt: DateTime.fromMillisecondsSinceEpoch(
+            ts * 1000,
+            isUtc: true,
+          ),
+        );
+      }
+    }
+
+    // A directory-only load that landed during the awaits above is newer.
+    if (!identical(directoryMetas, _directoryMetas)) {
+      _replaceDirectoryChannels(channels);
+    }
+    _sortChannels(channels);
 
     // Details are a separate cache. Invalidate changes that would otherwise
     // overwrite fresh Solo identity or archive state when opening a channel.
@@ -487,20 +657,7 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
     // after the await.
     fence.ensureCurrent();
 
-    final prevById = <String, Channel>{
-      for (final c in state.value ?? const <Channel>[]) c.id: c,
-    };
-    for (final channel in channels) {
-      final prev = prevById[channel.id];
-      if (prev == null ||
-          prev.isArchived != channel.isArchived ||
-          prev.channelType != channel.channelType ||
-          prev.visibility != channel.visibility ||
-          prev.createdBy != channel.createdBy ||
-          !listEquals(prev.labels, channel.labels)) {
-        ref.invalidate(channelDetailsProvider(channel.id));
-      }
-    }
+    final prevById = _invalidateChangedDetails(channels, state.value);
 
     // Layer live delivery onto the already-built snapshot without making EOSE
     // part of the provider's readiness path. Every refresh queues a generation;
@@ -512,49 +669,51 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
     // caller assigns whatever this returns, so the last check belongs here.
     fence.ensureCurrent();
     if (!fetchLastMessage) {
-      // Backstop metadata refreshes retain live timestamps in the persisted
+      // Background list reads retain live timestamps in the persisted
       // snapshot as well as the visible list.
       for (var i = 0; i < channels.length; i++) {
         final previous = prevById[channels[i].id]?.lastMessageAt;
-        if (previous != null) {
+        final fetched = channels[i].lastMessageAt;
+        if (previous != null &&
+            (fetched == null || previous.isAfter(fetched))) {
           channels[i] = channels[i].copyWith(lastMessageAt: previous);
         }
       }
     }
-    if (fetchLastMessage) _needsSnapshotRevalidation = latestEvents == null;
+    // A failed targeted batch also leaves new channels for a full read to date.
+    _needsSnapshotRevalidation =
+        latestEvents == null ||
+        (!fetchLastMessage && _needsSnapshotRevalidation);
+    if (latestEvents == null) _listReadRetry.schedule(_readListIfChanged);
+    if (hiddenDmIds != null) {
+      _channelListChangesRead = max(_channelListChangesRead, listChanges);
+    } else {
+      _channelListChanges++;
+    }
+    channels.removeWhere(
+      (channel) =>
+          channel.channelType == 'stream' &&
+          channel.visibility == 'private' &&
+          _verifiedHuddleIds.contains(channel.id),
+    );
     saveSnapshot?.call(channels, _hiddenDmIds);
+    // Publish the list before optional immutable receipt reconciliation.
+    final generation = _buildGeneration;
+    unawaited(
+      Future(
+        () => _reconcileHuddleReceipts(
+          session,
+          parsedMetas.values.toList(),
+          generation,
+        ),
+      ),
+    );
     return channels;
   }
 
-  /// Fetches each channel's independent latest-message window in one HTTP
-  /// bridge request. The relay preserves NIP-01 per-filter limits while
-  /// executing the filters with bounded concurrency, avoiding an unbounded
-  /// burst of websocket REQs on communities with many channels.
-  Future<List<NostrEvent>?> _fetchLastMessageEvents(
-    RelaySessionNotifier session,
-    List<ChannelData> channels,
-  ) async {
-    if (channels.isEmpty) return const [];
-
-    final filters = [
-      for (final channel in channels)
-        NostrFilter(
-          kinds: EventKind.channelMessageEventKinds,
-          tags: {
-            '#h': [channel.id],
-          },
-          limit: channel.channelType == 'dm' ? 1 : 20,
-        ),
-    ];
-
-    return _fetchChannelHistoryBatch(
-      session,
-      filters,
-      operation: 'latest-message query',
-    );
-  }
-
   /// Returns null when the batch is unavailable: it hit a relay deadline.
+  /// Adds to [failedChannelIds] the channels whose fallback filter failed
+  /// another way; the result has none of their events.
   ///
   /// The relay rejects a request whose filters name more than
   /// [kMaxExplicitChannelValues] channels in aggregate, so larger batches are
@@ -563,6 +722,7 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
     RelaySessionNotifier session,
     List<NostrFilter> filters, {
     required String operation,
+    Set<String>? failedChannelIds,
   }) async {
     final requests = <List<NostrFilter>>[];
     var channelValues = 0;
@@ -622,6 +782,7 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
     final fallbackEvents = await _fetchChannelHistoryFallback(
       session,
       fallback,
+      failedChannelIds,
     );
     return fallbackEvents == null ? null : [...events, ...fallbackEvents];
   }
@@ -629,6 +790,7 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
   Future<List<NostrEvent>?> _fetchChannelHistoryFallback(
     RelaySessionNotifier session,
     List<NostrFilter> filters,
+    Set<String>? failedChannelIds,
   ) async {
     final events = <NostrEvent>[];
     var deadline = false;
@@ -647,7 +809,11 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
             return await session.fetchHistory(filter);
           } catch (error) {
             // A timed-out filter makes the batch unavailable, not empty.
-            if (isRelayDeadlineError(error)) deadline = true;
+            if (isRelayDeadlineError(error)) {
+              deadline = true;
+            } else {
+              failedChannelIds?.addAll(filter.tags['#h'] ?? const []);
+            }
             return const <NostrEvent>[];
           }
         }),
@@ -707,146 +873,32 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
       isMember: isMember,
       ttlSeconds: data.ttlSeconds,
       ttlDeadline: data.ttlDeadline,
+      isUnlisted: data.isUnlisted,
+      joinsAsGuest: data.joinsAsGuest,
     );
   }
 
-  /// Backfills unread badges for the channels this refresh just installed.
-  ///
-  /// Runs detached from the refresh that starts it, so the lifecycle token
-  /// captured below is what keeps a response that outlived its refresh from
-  /// writing unread state into whatever the user is looking at now. Every
-  /// refresh path starts a catch-up, including the initial load, the ordinary
-  /// membership refresh a join performs and the reconnect backstop, so the
-  /// token is unconditional rather than tied to discovery. A retired refresh
-  /// returns instead of throwing: nothing awaits this future, so a thrown
-  /// [_StaleChannelRefresh] would only surface as an unhandled error.
-  ///
-  /// The request fence and subscription generation are passed from the refresh
-  /// that installed [channels], preserving request ownership after detachment.
-  Future<void> _catchUpUnreadEvents(
-    List<Channel> channels,
-    _ChannelRefreshFence fence,
-    int subscriptionGeneration,
-  ) async {
-    if (!ref.mounted) return;
-    try {
-      final myPk = ref.read(myPubkeyProvider);
-      if (myPk == null) return;
-
-      final session = ref.read(relaySessionProvider.notifier);
-      final mutedChannelIds = _mutedChannelIds();
-      final readState = ref.read(readStateProvider);
-      final activeChannels = [
+  void _publishUnreadCatchUp(Map<String, int> recordedAtByChannel) {
+    state = state.whenData(
+      (channels) => [
         for (final channel in channels)
-          if (channel.isMember && !channel.isArchived) channel,
-      ];
-      final channelById = {
-        for (final channel in activeChannels) channel.id: channel,
-      };
-      final readAtByChannel = {
-        for (final channel in activeChannels)
-          channel.id: readState.effectiveTimestamp(channel.id),
-      };
-      final filters = [
-        for (final channel in activeChannels)
-          NostrFilter(
-            kinds: EventKind.channelMessageEventKinds,
-            tags: {
-              '#h': [channel.id],
-            },
-            since: (readAtByChannel[channel.id] ?? -1) + 1,
-            limit: _unreadCatchUpLimit,
-          ),
-      ];
-
-      final events = await _fetchChannelHistoryBatch(
-        session,
-        filters,
-        operation: 'unread catch-up',
-      );
-      // Unavailable: keep the unread state already observed.
-      if (events == null) return;
-      // The relay round-trip above is the window Jed's probes park in: a newer
-      // refresh, a community switch or an identity switch here means every
-      // write below belongs to a channel list the user has left.
-      if (!ref.mounted || _isCatchUpRetired(fence, subscriptionGeneration)) {
-        return;
-      }
-
-      for (final event in events) {
-        if (event.pubkey.toLowerCase() == myPk.toLowerCase()) {
-          _recordSelfThreadInterest(event, myPk);
-        }
-      }
-
-      final recordedAtByChannel = <String, int>{};
-      for (final event in events) {
-        final channelId = event.channelId;
-        if (channelId == null) continue;
-        final channel = channelById[channelId];
-        if (channel == null) continue;
-        final readAt = readAtByChannel[channelId];
-        if (event.pubkey.toLowerCase() == myPk.toLowerCase()) continue;
-        if (readAt != null && event.createdAt <= readAt) continue;
-        if (!shouldNotifyForEvent(
-          event,
-          myPk,
-          participatedRootIds: _participatedRootIds,
-          followedRootIds: _followedRootIds(),
-          authoredRootIds: _authoredRootIds,
-          mutedChannelIds: mutedChannelIds,
-          channelId: channel.id,
-        )) {
-          continue;
-        }
-        _recordUnreadEvent(channel, event, myPk);
-        recordedAtByChannel[channelId] = max(
-          recordedAtByChannel[channelId] ?? 0,
-          event.createdAt,
-        );
-      }
-      // Republish only when this catch-up actually changed unread state. A
-      // batch that recorded nothing has nothing to show, and a failed or
-      // superseded batch must not repaint another refresh's list: the retired
-      // check above already returned in that case, and no await separates it
-      // from here, so a second check would be dead code.
-      // Recorded events also advance `lastMessageAt`, as live events do: a
-      // deadline-unavailable latest-message batch leaves it unset.
-      if (recordedAtByChannel.isNotEmpty) {
-        state = state.whenData(
-          (channels) => [
-            for (final channel in channels)
-              _advanceLastMessageAt(channel, recordedAtByChannel[channel.id]),
-          ],
-        );
-      }
-    } catch (error) {
-      if (!ref.mounted) return;
-      debugPrint('[ChannelsNotifier] unread catch-up failed: $error');
-    } finally {
-      // Optional history can terminate without data. Release this destination
-      // with its retained unread state, but never settle a retired request.
-      if (ref.mounted && !_isCatchUpRetired(fence, subscriptionGeneration)) {
-        _settledUnreadGeneration = subscriptionGeneration;
-        _notifyUnreadReadinessChanged();
-      }
-    }
-  }
-
-  static Channel _advanceLastMessageAt(Channel channel, int? createdAt) {
-    if (createdAt == null) return channel;
-    final at = DateTime.fromMillisecondsSinceEpoch(
-      createdAt * 1000,
-      isUtc: true,
+          _advanceLastMessageAt(channel, recordedAtByChannel[channel.id]),
+      ],
     );
-    final current = channel.lastMessageAt;
-    if (current != null && !at.isAfter(current)) return channel;
-    return channel.copyWith(lastMessageAt: at);
   }
 
   void _handleLiveEvent(NostrEvent event) {
+    if (_noteChannelChange(event) &&
+        event.kind == EventKind.nip29EditMetadata) {
+      return;
+    }
+    if (_applyUnreadDeletion(event)) {
+      state = state.whenData((channels) => List<Channel>.of(channels));
+      return;
+    }
     final channelId = event.channelId;
     if (channelId == null) return;
+    _applySavedMessageEdit(event, channelId);
 
     final myPk = ref.read(myPubkeyProvider);
     final mutedChannelIds = _mutedChannelIds();
@@ -859,10 +911,14 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
       }
       final updated = List<Channel>.of(channels);
       final channel = updated[idx];
-
-      if (myPk != null && event.pubkey.toLowerCase() == myPk.toLowerCase()) {
-        _recordSelfThreadInterest(event, myPk);
+      _activityRevisions[channelId] = activityRevisionFor(channelId) + 1;
+      if (EventKind.channelMessageEventKinds.contains(event.kind) &&
+          event.createdAt >
+              (_filterEvidence[channelId]?.event?.createdAt ?? -1)) {
+        _filterEvidence[channelId] = (event: event);
       }
+
+      _noteThreadEvent(event, channel.id, myPk);
 
       if (myPk != null &&
           shouldNotifyForEvent(
@@ -871,10 +927,11 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
             participatedRootIds: _participatedRootIds,
             followedRootIds: _followedRootIds(),
             authoredRootIds: _authoredRootIds,
+            mutedRootIds: _unfollowedRootIds(channel),
             mutedChannelIds: mutedChannelIds,
             channelId: channel.id,
-          )) {
-        _recordUnreadEvent(channel, event, myPk);
+          ) &&
+          _recordUnreadEvent(channel, event, myPk)) {
         final eventTime = DateTime.fromMillisecondsSinceEpoch(
           event.createdAt * 1000,
           isUtc: true,
@@ -894,9 +951,6 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
       if (entry.value.muted) entry.key,
   };
 
-  Set<String> _followedRootIds() =>
-      ref.read(threadFollowsProvider).followedRootIds;
-
   void _loadThreadInterestStores(String pubkey) {
     final normalizedPubkey = pubkey.toLowerCase();
     if (_threadInterestPubkey == normalizedPubkey) return;
@@ -915,12 +969,13 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
     }
   }
 
-  void _recordSelfThreadInterest(NostrEvent event, String pubkey) {
+  /// Adds [event]'s thread to the in-memory interest sets; true when new.
+  /// Callers persist with [_writeThreadInterestStores], once per batch: each
+  /// write re-encodes both whole sets on the main thread.
+  bool _addSelfThreadInterest(NostrEvent event) {
     final ref = event.threadReference;
     final target = ref.rootId != null ? _participatedRootIds : _authoredRootIds;
-    final id = ref.rootId ?? event.id;
-    if (!target.add(id)) return;
-    _writeThreadInterestStores(pubkey);
+    return target.add(ref.rootId ?? event.id);
   }
 
   void _writeThreadInterestStores(String pubkey) {
@@ -942,7 +997,11 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
 
   void clearObservedUnreadForChannel(String channelId) {
     _latestObservedByChannel.remove(channelId);
-    _observedUnreadEventsByChannel.remove(channelId);
+    _activityRevisions.remove(channelId);
+    _filterEvidence.remove(channelId);
+    if (_observedUnreadEventsByChannel.remove(channelId) != null) {
+      _observedUnreadRevisions.touch(channelId);
+    }
     state = state.whenData((channels) => List<Channel>.of(channels));
   }
 
@@ -953,8 +1012,8 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
     }
   }
 
-  /// Backstop refresh that preserves existing state on transient failure.
-  Future<void> _backstopRefresh() async {
+  /// Reads the list again, keeping existing state on transient failure.
+  Future<void> _readListInBackground() async {
     try {
       final sessionState = ref.read(relaySessionProvider);
       final channels = await _fetch(
@@ -966,7 +1025,10 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
     } on _StaleChannelRefresh {
       return;
     } catch (error) {
-      debugPrint('[ChannelsNotifier] backstop refresh failed: $error');
+      debugPrint('[ChannelsNotifier] background list read failed: $error');
+      // The list may have changed since the last good read, so count this one
+      // as unread to have it retried.
+      _channelListChanges++;
     }
   }
 
@@ -1022,7 +1084,32 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
     }
   }
 
-  /// Loads the directory when Browse channels opens after startup or an error.
+  /// Reads [channelId]'s kind:39000 metadata so a link can open a channel
+  /// that is not in the loaded list.
+  ///
+  /// The loaded list holds member channels and, after Browse, the open
+  /// directory. A link can name an open channel outside both. The relay
+  /// filters the read by the caller's access, so call this only on a
+  /// connected session. Like directory discovery, a private channel or DM
+  /// opens only from the member list. Returns null when no channel qualifies.
+  Future<Channel?> fetchOpenChannel(String channelId) async {
+    final metas = await ref
+        .read(relaySessionProvider.notifier)
+        .fetchHistory(NostrFilters.channelMetadata([channelId]));
+    final latest = _latestChannelEvents(
+      metas,
+      kind: 39000,
+    ).where((event) => event.getTagValue('d') == channelId).firstOrNull;
+    if (latest == null) return null;
+    final data = ChannelData.fromEvent(latest);
+    if (data.visibility == 'private' || data.channelType == 'dm') return null;
+    return _channelFromMeta(latest, data, isMember: false);
+  }
+
+  /// Makes the directory available to a reader that just opened: restores
+  /// the saved copy or reads the whole directory, then checks the relay for
+  /// changes in the background, on the next connect when disconnected (see
+  /// [_ChannelsNotifierDirectory]).
   Future<void> ensureDirectoryLoaded() async {
     final directoryState = ref.read(channelDirectoryLoadStatusProvider);
     final scope = channelDirectoryScope(
@@ -1030,16 +1117,21 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
       ref.read(myPubkeyProvider),
     );
     if (directoryState.scope == scope &&
-        (directoryState.status == ChannelDirectoryLoadStatus.loading ||
-            directoryState.status == ChannelDirectoryLoadStatus.loaded)) {
+        directoryState.status == ChannelDirectoryLoadStatus.loading) {
       return;
     }
-    await retryDirectory();
+    if (!await _restoreSavedDirectory(scope)) {
+      await retryDirectory(directoryOnly: true);
+      return;
+    }
+    _checkSavedDirectoryWhenConnected();
   }
 
   /// Retries channel discovery while retaining the current channel list.
-  Future<void> retryDirectory() async {
-    final previousChannels = state.value;
+  ///
+  /// With [directoryOnly], a list that has loaded its memberships reads only
+  /// the directory again; joined channels keep their entries.
+  Future<void> retryDirectory({bool directoryOnly = false}) async {
     final directoryStatus = ref.read(
       channelDirectoryLoadStatusProvider.notifier,
     );
@@ -1056,9 +1148,37 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
       directoryStatus.markError(scope);
       return;
     }
+    // This attempt replaces the last failure before anything can retire it,
+    // so a displaced attempt never reports the old error (beginRefresh clears
+    // it too, for other entry points, but only after a yield).
+    if (directoryStatus.hasFailed(scope)) directoryStatus.markIdle(scope);
+    // Let a pending first load finish, as fetchFresh does. This request
+    // would retire it, and its late failure would replace the list.
+    final generation = _buildGeneration;
+    try {
+      await future;
+    } catch (_) {
+      // A failed first load must not prevent the directory request.
+    }
+    if (!ref.mounted || generation != _buildGeneration) return;
+    final previousChannels = state.value;
+    if (directoryOnly && _hasLoaded && previousChannels != null) {
+      // The list has its memberships, so only the directory is read again.
+      final saveSnapshot = _saveSnapshot;
+      final channels = await _loadDirectoryOnly(() => state.value);
+      if (channels == null) return;
+      state = AsyncData(channels);
+      saveSnapshot?.call(channels, _hiddenDmIds);
+      return;
+    }
     try {
       state = AsyncData(
-        await _fetch(subscribeLive: true, fetchDirectory: true),
+        await _fetch(
+          subscribeLive: true,
+          // Live subscriptions keep a loaded list's latest-message times.
+          fetchLastMessage: previousChannels == null,
+          fetchDirectory: true,
+        ),
       );
     } on _StaleChannelRefresh {
       // A community or identity switch retired this request. Its response

@@ -89,7 +89,11 @@ Clients **partition by kind before any cursor math**:
    deletions targeting those aux events (the transitive second hop, e.g.
    a delete-of-a-reaction). One round trip; no client `#e` fan-out. Each
    hop is drained server-side across the DB page clamp, so the closure is
-   complete rather than newest-1000.
+   complete rather than newest-1000. Both hops read only events dated at
+   most one day before the oldest retained row
+   (`WINDOW_AUX_SINCE_MARGIN_SECS`), so they can skip older `events`
+   partitions; ingest's ±15 min clock check keeps aux events within that
+   margin of their targets.
 3. **Thread summaries** (`include_summaries`) — one relay-signed
    `kind:39005` per row that has replies.
 4. **Window bounds** — exactly one relay-signed `kind:39006` per window
@@ -99,7 +103,7 @@ Clients **partition by kind before any cursor math**:
 
 - tags: `["e", <root-id>]`, `["d", <root-id>]`, `["h", <channel-id>]`
 - content: `{"reply_count":n,"descendant_count":n,"last_reply_at":ts|null,"participants":["<hex-pubkey>",...]}`
-  (participants: up to 10, most recent first)
+  (participants: up to 10 from the newest 1000 replies, deleted ones included, most recent first)
 - Signed by the relay keypair. Synthesized at query time, **never stored**.
   Clients treat it as replace-by-target metadata keyed by the `e`/`d` tag
   (the `d` tag gives parameterized-replaceable semantics natively); it is

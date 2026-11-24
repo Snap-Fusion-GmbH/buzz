@@ -57,7 +57,7 @@ pub enum MeetingStatus {
     Cancelled,
 }
 
-/// A meeting series stored as the content of a kind:30623 event.
+/// A meeting series stored as the content of a kind:30624 event.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct MeetingDefinition {

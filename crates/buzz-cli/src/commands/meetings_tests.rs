@@ -49,7 +49,11 @@ async fn fixture(
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    let client = BuzzClient::new(format!("http://{address}"), keys, None, None).unwrap();
+    let client = BuzzClient::new(
+        format!("http://{address}"),
+        crate::credentials::Credentials::from_keys(keys),
+    )
+    .unwrap();
     (client, requests, server)
 }
 
@@ -100,7 +104,7 @@ async fn create_publishes_one_signed_channel_bound_snapshot_with_nudges_off() {
     let parsed = parse_channel_meeting(&writes[0]).unwrap();
     assert_eq!(parsed.channel_id, channel);
     assert_eq!(parsed.definition, definition());
-    assert_eq!(writes[0].pubkey, client.keys().public_key());
+    assert_eq!(writes[0].pubkey, client.public_key());
 }
 
 #[tokio::test]
@@ -150,7 +154,7 @@ async fn cancel_strong_reads_the_signers_head_and_publishes_a_newer_cancelled_sn
     assert_eq!(queries[0][0]["consistency"], "strong");
     assert_eq!(
         queries[0][0]["authors"],
-        json!([client.keys().public_key().to_hex()])
+        json!([client.public_key().to_hex()])
     );
     assert_eq!(queries[0][0]["#h"], json!([channel.to_string()]));
     assert_eq!(

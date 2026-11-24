@@ -1,102 +1,105 @@
+import '../../../shared/widgets/section_state_chevron.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 
 import '../../../shared/theme/theme.dart';
-import '../../../shared/theme/buzz_icons.dart';
 import '../../../shared/widgets/collapsible_section_body.dart';
+import '../../../shared/widgets/collapsible_sliver_body.dart';
+
+import '../channel_sections/section_options_button.dart';
+import '../channels_page/filters.dart';
 
 /// A project or unassigned-chat section matching the Channels list headings.
 class MeSection extends HookWidget {
   const MeSection({
     super.key,
     required this.label,
-    required this.icon,
     required this.children,
-    this.hasUnread = false,
-  });
+    this.sliver = false,
+    this.compactHeaderGap = false,
+    this.onFilter,
+  }) : buildBody = null;
+
+  const MeSection.sliverBody({
+    super.key,
+    required this.label,
+    required this.buildBody,
+    this.onFilter,
+    this.compactHeaderGap = false,
+  }) : sliver = true,
+       children = const [];
 
   final String label;
-
-  /// Keeps unread activity visible when this section is collapsed.
-  final bool hasUnread;
-  final IconData icon;
+  final VoidCallback? onFilter;
+  final bool sliver;
+  final bool compactHeaderGap;
   final List<Widget> children;
+  final Widget Function(bool expanded)? buildBody;
 
   @override
   Widget build(BuildContext context) {
     final expanded = useState(true);
-    final color = navigationSectionForeground(context);
-    final reducedMotion = MediaQuery.disableAnimationsOf(context);
+    final inset = compactHeaderGap ? Grid.inventoryRowInset : Grid.xxs;
+    final toggle = Semantics(
+      label: label,
+      excludeSemantics: true,
+      onTap: () => expanded.value = !expanded.value,
+      button: true,
+      expanded: expanded.value,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(Radii.md),
+        onTap: () => expanded.value = !expanded.value,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+            Grid.xxs,
+            compactHeaderGap ? Grid.inventorySectionTopInset : inset,
+            Grid.xxs,
+            inset,
+          ),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: compactHeaderGap ? 0 : 28),
+            child: SectionHeadingLabel(label: label, expanded: expanded.value),
+          ),
+        ),
+      ),
+    );
+    final header = onFilter == null
+        ? toggle
+        : Row(
+            children: [
+              Expanded(child: toggle),
+              Padding(
+                padding: EdgeInsets.zero,
+                child: SectionOptionsButton(
+                  tooltip: '$label options',
+                  onPressed: onFilter!,
+                ),
+              ),
+            ],
+          );
+    if (sliver) {
+      return SliverMainAxisGroup(
+        slivers: [
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.only(
+                left: MessagesSectionOptions.leadingInset(context) - Grid.xxs,
+                right: Grid.gutter - Grid.xxs,
+              ),
+              child: header,
+            ),
+          ),
+          CollapsibleSliverBody(
+            expanded: expanded.value,
+            sliver: SliverList.list(children: children),
+          ),
+        ],
+      );
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Semantics(
-          label: hasUnread ? '$label, unread' : label,
-          excludeSemantics: true,
-          onTap: () => expanded.value = !expanded.value,
-          button: true,
-          expanded: expanded.value,
-          child: InkWell(
-            borderRadius: BorderRadius.circular(Radii.md),
-            onTap: () => expanded.value = !expanded.value,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: Grid.xxs,
-                vertical: Grid.twelve,
-              ),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(minHeight: 28),
-                child: Row(
-                  children: [
-                    SizedBox(
-                      width: 22,
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: Icon(icon, size: 18, color: color),
-                      ),
-                    ),
-                    const SizedBox(width: Grid.xxs),
-                    Expanded(
-                      child: Text(
-                        label,
-                        style: contentListTitleTextStyle.copyWith(
-                          color: color,
-                          fontSize: 17,
-                          height: 22 / 17,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                    if (hasUnread) ...[
-                      Container(
-                        key: ValueKey('solo-section-unread-$label'),
-                        width: 8,
-                        height: 8,
-                        decoration: BoxDecoration(
-                          color: context.colors.primary,
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                      const SizedBox(width: Grid.xxs),
-                    ],
-                    AnimatedRotation(
-                      turns: expanded.value ? 0 : -0.25,
-                      duration: reducedMotion
-                          ? Duration.zero
-                          : sectionExpandDuration,
-                      curve: sectionExpandCurve,
-                      child: Icon(
-                        BuzzIcons.chevronDown,
-                        size: 18,
-                        color: color,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
+        header,
         CollapsibleSectionBody(
           expanded: expanded.value,
           child: Column(children: children),

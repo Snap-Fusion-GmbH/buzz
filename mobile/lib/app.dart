@@ -1,11 +1,22 @@
+import 'features/activity/activity_provider.dart';
+import 'features/channels/bestie_conversation.dart';
+import 'features/channels/default_agent_launcher.dart';
+import 'features/channels/quick_send_host.dart';
+import 'features/agents/agents_page.dart';
+
 import 'dart:async';
+
 import 'hosted_app_gate.dart';
 import 'onboarding_app_entry.dart';
+import 'organization_app_entry.dart';
+import 'shared/share/signed_out_share_notice.dart';
+import 'shared/hosted/organization_environment.dart';
 import 'shared/widgets/ios_navigation_metrics.dart';
 import 'shared/community/paired_community_landing.dart';
 import 'shared/community/community_loading_surface.dart';
 
 import 'package:app_badge_plus/app_badge_plus.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 
@@ -14,9 +25,6 @@ import 'package:uuid/uuid.dart';
 
 import 'features/age_gate/age_restriction_page.dart';
 import 'features/age_gate/age_signal_provider.dart';
-import 'features/activity/activity_provider.dart';
-import 'features/activity/inbox_local_state_provider.dart';
-import 'features/activity/inbox_read_state.dart';
 import 'features/channels/channel.dart';
 import 'features/channels/channel_management_provider.dart';
 import 'features/channels/channels_provider.dart';
@@ -31,7 +39,10 @@ import 'features/pairing/pairing_page.dart';
 import 'features/pairing/pairing_provider.dart';
 import 'features/channels/agent_activity/observer_subscription.dart';
 import 'features/channels/channel_detail_page.dart';
+import 'features/channels/notification_reply.dart';
 import 'shared/widgets/app_route_observer.dart';
+import 'shared/widgets/root_page_route.dart';
+import 'features/profile/profile_provider.dart';
 import 'features/profile/user_status_cache_provider.dart';
 import 'features/profile/settings_profile_header.dart';
 import 'features/profile/set_status_sheet.dart';
@@ -44,9 +55,13 @@ import 'shared/auth/auth.dart';
 import 'shared/deeplink/pending_deep_link_provider.dart';
 import 'shared/emoji/emoji_burst.dart';
 import 'shared/relay/relay.dart';
-import 'shared/read_state/read_state_provider.dart';
+import 'shared/diagnostics/diagnostic_navigation_observer.dart';
+import 'shared/diagnostics/diagnostic_reporter.dart';
 import 'shared/theme/theme.dart';
 import 'shared/widgets/buzz_loading_indicator.dart';
+import 'shared/read_state/failed_clear_notice.dart';
+import 'shared/widgets/buzz_toast_host.dart';
+import 'shared/widgets/covered_route_keyboard_insets.dart';
 
 const _starterChannelNamespace = '3ce33bea-8f09-5f1b-9c85-8a7d2659e6b0';
 
@@ -58,29 +73,26 @@ const _retiredPublicStarterSlugs = ['general', 'welcome-everyone'];
 /// The private per-user channel seeded by earlier releases.
 const _retiredPrivateWelcomeName = 'Welcome';
 
-final _inviteRelayConnectedProvider = FutureProvider.family<void, String>((
-  ref,
-  expectedRelayUrl,
-) async {
-  final currentConfig = ref.read(relayConfigProvider);
-  if (currentConfig.baseUrl != expectedRelayUrl) {
-    throw StateError('Active community changed before invite recovery');
-  }
-  if (ref.read(relaySessionProvider).status == SessionStatus.connected) return;
-
+/// Waits for this attempt's community to hold an authenticated connection.
+///
+/// Each attempt observes the live session, so a retry never reuses an earlier
+/// attempt's failure or a connection that has since been lost.
+Future<void> _waitForInviteRelay(Ref ref, bool Function() isScopeCurrent) {
   final connected = Completer<void>();
-  ref.listen(relaySessionProvider, (_, next) {
+  final sub = ref.listen(relaySessionProvider, (_, next) {
     if (connected.isCompleted) return;
-    if (ref.read(relayConfigProvider).baseUrl != expectedRelayUrl) {
+    if (!isScopeCurrent()) {
       connected.completeError(
         StateError('Active community changed during invite recovery'),
       );
     } else if (next.status == SessionStatus.connected) {
       connected.complete();
     }
-  });
-  await connected.future;
-});
+  }, fireImmediately: true);
+  return connected.future
+      .timeout(const Duration(seconds: 15))
+      .whenComplete(sub.close);
+}
 
 /// App-level bridge from invite joining to the channels feature.
 class MobileInviteJoinRecovery implements InviteJoinRecovery {
@@ -239,9 +251,7 @@ InviteJoinRecovery buildMobileInviteJoinRecovery(
       ensureScopeCurrent();
       await ref.read(activeCommunityProvider.future);
       ensureScopeCurrent();
-      await ref
-          .read(_inviteRelayConnectedProvider(scope.relayHttpOrigin).future)
-          .timeout(const Duration(seconds: 15));
+      await _waitForInviteRelay(ref, isScopeCurrent);
       ensureScopeCurrent();
       final channels = await ref
           .read(channelsProvider.notifier)
@@ -263,28 +273,6 @@ InviteJoinRecovery buildMobileInviteJoinRecovery(
   );
 }
 
-/// App-shell projection that joins Activity state for the Home navigation.
-///
-/// This belongs at the composition root because it deliberately aggregates
-/// Activity feature providers for a sibling navigation surface.
-final _unreadInboxItemCountProvider = Provider<int>((ref) {
-  final readState = ref.watch(readStateProvider);
-  if (!readState.isReady) return 0;
-
-  final localState = ref.watch(inboxLocalStateProvider);
-  final items = ref.watch(inboxItemsProvider);
-  return items
-      .where(
-        (item) => !isInboxItemDone(
-          item,
-          markerOf: readState.effectiveTimestamp,
-          localUnreadOverrides: localState.unreadIds,
-          localDoneSet: localState.doneIds,
-        ),
-      )
-      .length;
-});
-
 final _mobileRootNavigatorKey = GlobalKey<NavigatorState>();
 
 class App extends HookConsumerWidget {
@@ -298,10 +286,26 @@ class App extends HookConsumerWidget {
         ref.read(pairingProvider.notifier).reset();
       }
     });
-    final communityTheme = ageSignalState != AgeSignalState.restricted
-        ? ref.watch(communityThemeProvider)
-        : defaultCommunityTheme;
-    final themeMode = communityTheme.mode;
+    final restricted = ageSignalState == AgeSignalState.restricted;
+    final communityTheme = restricted
+        ? defaultCommunityTheme
+        : ref.watch(communityThemeProvider);
+    final themeMode = restricted
+        ? defaultCommunityTheme.mode
+        : ref.watch(appearanceModeProvider);
+    // The app rebuilds on every lifecycle change. A new ThemeData never
+    // equals the last one, so MaterialApp would animate between identical
+    // themes, and each frame of that makes every message re-parse its
+    // markdown. Build the themes only when the accent changes.
+    final accent = communityTheme.accent;
+    final lightTheme = useMemoized(
+      () => mobileAppearanceTheme(Brightness.light, accent),
+      [accent],
+    );
+    final darkTheme = useMemoized(
+      () => mobileAppearanceTheme(Brightness.dark, accent),
+      [accent],
+    );
     final authState = ref.watch(authProvider);
     final pairedCommunity = ref.watch(pairedCommunityLandingProvider);
 
@@ -314,8 +318,6 @@ class App extends HookConsumerWidget {
 
     // Eagerly initialize websocket session and lifecycle observer when
     // authenticated. These providers connect and manage the websocket.
-    var hasUnreadInbox = false;
-    var hasUnreadSolo = false;
     if (ageSignalState != AgeSignalState.restricted &&
         authState.value?.status == AuthStatus.authenticated) {
       ref.watch(relaySessionProvider);
@@ -327,15 +329,20 @@ class App extends HookConsumerWidget {
       ref.listen(observerRelayProvider, (_, _) {});
       ref.watch(appLifecycleProvider);
       ref.listen(userStatusCacheProvider, (_, _) {});
-      hasUnreadInbox = ref.watch(_unreadInboxItemCountProvider) > 0;
-      hasUnreadSolo = ref.watch(
-        meUnreadChannelIdsProvider.select((ids) => ids.isNotEmpty),
-      );
+      // Presence heartbeats run only while something holds this provider.
+      ref.listen(presenceProvider, (_, _) {});
+      // Activity owns hidden-DM recovery even when Inbox is never opened.
+      ref.listen(activityProvider, (_, _) {});
+      // Preserve initial read seeding even while Solo is hidden.
+      ref.listen(meUnreadChannelIdsProvider, (_, _) {});
     }
 
     // Start listening for buzz:// links immediately (even pre-auth) so a
     // cold-start link survives until the authenticated UI can dispatch it.
     ref.watch(pendingDeepLinkProvider);
+    // Unconditional: iOS may launch the app in the background only to send a
+    // notification reply, and no later frame may come to rebuild this.
+    ref.listen(notificationReplySenderProvider, (_, _) {});
 
     void applyBadge(UnreadBadgeState state) {
       if (state.highPriorityCount > 0) {
@@ -361,67 +368,122 @@ class App extends HookConsumerWidget {
       });
     }
 
+    final home = authState.when(
+      loading: () => const _SplashScreen(),
+      // An internal build never offers pairing, even when auth state is
+      // unreadable: pairing could make another relay the active community.
+      error: (_, _) => OrganizationEnvironment.enabled
+          ? const OrganizationAppEntry()
+          : const PairingPage(),
+      data: (state) => switch (state.status) {
+        AuthStatus.authenticated => HostedAppGate(
+          authenticated: true,
+          child: CoveredRouteKeyboardInsets(
+            child: FailedClearNotice(
+              child: HomePage(
+                onAgents: showAgents,
+                defaultAgentBuilder: (context) => DefaultAgentLauncher(
+                  onChooseAgent: () => showAgents(context, createOnOpen: true),
+                ),
+                openBestieConversation: openBestieConversation,
+                mePageBuilder: (_, chat, workspace) => MePage(
+                  sliver: true,
+                  newChatAction: chat,
+                  newWorkspaceAction: workspace,
+                ),
+                backgroundHost: defaultTargetPlatform == TargetPlatform.iOS
+                    ? const QuickSendHost()
+                    : null,
+                settingsPageBuilder: _buildSettingsPage,
+                communityInvitePageBuilder: (_) => const CommunityInvitePage(),
+                communityAppearancePageBuilder: (_) => const ThemePickerPage(),
+              ),
+            ),
+          ),
+        ),
+        _ => const HostedAppGate(
+          authenticated: false,
+          child: SignedOutShareNotice(child: OnboardingAppEntry()),
+        ),
+      },
+    );
+    final latestHome = useRef<Widget?>(null)..value = home;
+    final screenTrail = ref.read(diagnosticScreenTrailProvider);
+    final screenObserver = useMemoized(screenTrail.observer);
+    useEffect(() => screenObserver.dispose, [screenObserver]);
+    // The root page's content changes in place as auth settles (splash, then
+    // onboarding or Home) with no navigation, so name it again.
+    final homeKind = authState.when(
+      loading: () => null,
+      error: (_, _) => false,
+      data: (state) => state.status,
+    );
+    useEffect(() {
+      screenObserver.refresh();
+      return null;
+    }, [homeKind]);
+    // The age restriction replaces the navigator rather than covering a route.
+    // It is named only as `other`: its own name would reveal an age signal.
+    useEffect(() {
+      screenTrail.cover(
+        ageSignalState == AgeSignalState.restricted
+            ? DiagnosticScreen.other
+            : null,
+      );
+      return null;
+    }, [ageSignalState]);
+
     return MaterialApp(
       navigatorKey: _mobileRootNavigatorKey,
-      navigatorObservers: [appRouteObserver],
+      navigatorObservers: [appRouteObserver, screenObserver],
       title: 'Buzz',
-      theme: mobileAppearanceTheme(Brightness.light, communityTheme.accent),
-      darkTheme: mobileAppearanceTheme(Brightness.dark, communityTheme.accent),
+      debugShowCheckedModeBanner: false,
+      theme: lightTheme,
+      darkTheme: darkTheme,
       themeMode: themeMode,
       // Above the navigator, so an age restriction cannot be bypassed by a
       // route that was pushed while the store signal request was in flight.
       builder: (context, child) => switch (ageSignalState) {
         AgeSignalState.restricted => const AgeRestrictionPage(),
-        _ => IosNavigationMetricsHost(
-          child: AppMarkdownTheme(
-            child: MobileHuddleShell(
-              navigatorKey: _mobileRootNavigatorKey,
-              child: EmojiBurstOverlay(
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    ExcludeSemantics(
-                      excluding: pairedCommunity != null,
-                      child: AbsorbPointer(
-                        absorbing: pairedCommunity != null,
-                        child: child ?? const SizedBox.shrink(),
+        _ => BuzzToastHost(
+          child: IosNavigationMetricsHost(
+            child: AppMarkdownTheme(
+              child: MobileHuddleShell(
+                navigatorKey: _mobileRootNavigatorKey,
+                child: EmojiBurstOverlay(
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      ExcludeSemantics(
+                        excluding: pairedCommunity != null,
+                        child: AbsorbPointer(
+                          absorbing: pairedCommunity != null,
+                          child: child ?? const SizedBox.shrink(),
+                        ),
                       ),
-                    ),
-                    // Cover the navigator while onboarding is removed and the
-                    // destination installs the matching avatar-flight route.
-                    if (pairedCommunity != null)
-                      CommunityLoadingSurface(
-                        name: pairedCommunity.name,
-                        relayUrl: pairedCommunity.relayUrl,
-                      ),
-                  ],
+                      // Cover the navigator while onboarding is removed and the
+                      // destination installs the matching avatar-flight route.
+                      if (pairedCommunity != null)
+                        CommunityLoadingSurface(
+                          name: pairedCommunity.name,
+                          relayUrl: pairedCommunity.relayUrl,
+                        ),
+                    ],
+                  ),
                 ),
               ),
             ),
           ),
         ),
       },
-      home: authState.when(
-        loading: () => const _SplashScreen(),
-        error: (_, _) => const PairingPage(),
-        data: (state) => switch (state.status) {
-          AuthStatus.authenticated => HostedAppGate(
-            authenticated: true,
-            child: HomePage(
-              mePageBuilder: (_, action) => MePage(newChatAction: action),
-              settingsPageBuilder: _buildSettingsPage,
-              communityInvitePageBuilder: (_) => const CommunityInvitePage(),
-              communityAppearancePageBuilder: (_) => const ThemePickerPage(),
-              hasUnreadInbox: hasUnreadInbox,
-              hasUnreadSolo: hasUnreadSolo,
-            ),
-          ),
-          _ => const HostedAppGate(
-            authenticated: false,
-            child: OnboardingAppEntry(),
-          ),
-        },
-      ),
+      // A root route that refuses pops, so a stray pop can never leave an
+      // empty navigator. It reads [home] when built, so it follows auth.
+      onGenerateRoute: (settings) => settings.name == Navigator.defaultRouteName
+          ? RootPageRoute<void>(
+              settings: settings,
+              builder: (_) => latestHome.value!,
+            )
+          : null,
     );
   }
 }

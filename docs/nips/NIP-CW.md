@@ -101,7 +101,7 @@ For a valid window filter on an accessible channel (§Channel-mode Access Scopin
 1. **Select rows.** From the target channel, take events that are top-level (§Channel-mode Top-level Classification), not deleted, and matching `kinds` if present, in the total order `created_at DESC, id ASC` (`id` compared bytewise). With a cursor `(ts, id)`, retain only events where `created_at < ts OR (created_at = ts AND id > id)`.
 2. **Probe exhaustion.** Evaluate the query with an internal budget of `limit + 1` rows *after all predicates*. If `limit + 1` rows match, `has_more = true` and the sentinel row is discarded — it MUST NOT appear on the wire, in overlays, or in the aux closure. Otherwise `has_more = false`.
 3. **Derive the next cursor.** If `has_more`, `next_cursor` is the **scan position**: the composite cursor of the last retained candidate, captured *before* any serving-time reconstruction or filtering of individual events. Otherwise `next_cursor = null`. The invariant `next_cursor = null ⇔ has_more = false` MUST hold. Because it is a scan position, `next_cursor` MAY reference an event that does not appear in the response (e.g. one skipped by the relay as unreconstructable); it is authoritative regardless, and deriving it from delivered rows instead would stall pagination on every skipped event.
-4. **Append the aux closure** (if `include_aux` and at least one row): two hops of events referencing the rows by `e` tag. Hop 1: reactions (`kind:7`), deletions (`kind:5`, `kind:9005`), and edits (Buzz `kind:40003`) whose `e` tag is a row id. Hop 2: deletions whose `e` tag is a hop-1 event id (a delete-of-a-reaction). Each event appears at most once; access-scoped events the requester cannot read are omitted. Relays MAY cap each hop (Buzz: 1000 events per hop).
+4. **Append the aux closure** (if `include_aux` and at least one row): two hops of events referencing the rows by `e` tag. Hop 1: reactions (`kind:7`), deletions (`kind:5`, `kind:9005`), and edits (Buzz `kind:40003`) whose `e` tag is a row id. Hop 2: deletions whose `e` tag is a hop-1 event id (a delete-of-a-reaction). Each event appears at most once; access-scoped events the requester cannot read are omitted. Relays MAY cap each hop (Buzz: 1000 events per hop). Relays MAY also omit, from both hops, events whose `created_at` is more than a fixed margin before the oldest row's (Buzz: one day), so the lookups need not scan the channel's whole history; the margin MUST exceed twice the relay's accepted clock drift, since a target and its aux event may each be stamped up to that drift away from real time in opposite directions.
 5. **Append thread summaries** (if `include_summaries`): one `kind:39005` per row that has at least one reply. Rows without replies get none.
 6. **Append window bounds**: exactly one `kind:39006` per served window response, always — including empty and exhausted pages.
 
@@ -139,7 +139,7 @@ One per returned row with replies. Tag cardinality is exact: one `e`, one `d`, o
 
 - `reply_count` — direct replies to the row. `descendant_count` — all events in the row's thread subtree.
 - `last_reply_at` — unix seconds of the newest descendant, or `null`.
-- `participants` — up to 10 distinct author pubkeys from the thread, most recent first.
+- `participants` — up to 10 distinct author pubkeys from the thread's newest 1000 replies, deleted replies included, most recent first. Deleted replies contribute no author, and an author silent for 1000 replies drops out.
 - The `e` and `d` tags both carry the row's event id: `e` for reference-following, `d` for replaceable addressing.
 
 ### `kind:39006` — window bounds
@@ -215,6 +215,34 @@ A client explicitly falling back from thread windows MUST restart this path
 from the oldest reply with clean pagination state. `until`/`before_id` are not
 legacy thread continuation fields and MUST NOT be reused as such.
 
+## Plain Thread-reply Filters
+
+A plain NIP-01 filter (no `depth_limit`, no `thread_window`) is a "newest
+replies to this thread" read when all of these hold:
+
+- `#h` holds exactly one value;
+- `#e` holds exactly one lowercase-hex event id, naming a thread root (a message
+  that is not itself a reply);
+- `kinds` is present and every kind is `9` or `40002`;
+- the filter has no `#p`, `authors`, or `ids`.
+
+Buzz serves it from stored thread metadata rather than by testing every event
+that tags the root, so a page costs the same at any thread size. Ordering,
+`limit`, `since`, `until`, `before_id`, and every other filter field keep their
+usual meaning. When `#e` names a nested reply, the filter is served the
+ordinary NIP-01 way.
+
+Thread metadata exists only for a message whose NIP-10 `reply` marker resolves
+to a valid ancestry; a lone `root` marker classifies a message as top-level. A
+message of those kinds that names the root only in a bare, `mention`, or lone
+`root` `e` tag matches the filter under NIP-01 but is **not** returned by this
+read, though live subscriptions still deliver it. The same holds for a reply
+stored before the relay recorded thread metadata. Clients that need such
+references SHOULD add another kind to the filter, which takes the generic path.
+COUNT is unaffected: it counts every event that matches under NIP-01, so a
+COUNT of this filter can exceed the number of events the read returns. That
+difference is intended.
+
 ## Thread Mode
 
 `thread_window: true` requests a newest-first page of replies to one root. It is
@@ -271,6 +299,8 @@ For an authorized request the relay MUST:
    original signatures, deduplicate by event ID, and apply access control to
    every event. A target reference requires an `e` tag with the target ID
    in its second position; containing both strings elsewhere is insufficient.
+   As in channel mode, relays MAY omit auxiliary events dated more than a fixed
+   margin before the oldest target, which always includes the root.
 5. Append one bounds event to each served page, including empty and exhausted
    pages. Refresh access for the **entire query batch** before releasing any
    events or bounds. If the reader's accessible-channel set changed while any

@@ -5,12 +5,14 @@ class _PhotoGalleryPicker extends StatelessWidget {
   final Future<List<XFile>> Function() onPickAllPhotos;
   final Future<void> Function(List<XFile> photos) onChoosePhotos;
   final Future<void> Function(List<XFile> photos) onChooseAllPhotos;
+  final Future<void> Function(Future<void> Function()) preparePhotos;
 
   const _PhotoGalleryPicker({
     required this.onBack,
     required this.onPickAllPhotos,
     required this.onChoosePhotos,
     required this.onChooseAllPhotos,
+    required this.preparePhotos,
   });
 
   @override
@@ -20,6 +22,7 @@ class _PhotoGalleryPicker extends StatelessWidget {
       onPickAllPhotos: onPickAllPhotos,
       onChoosePhotos: onChoosePhotos,
       onChooseAllPhotos: onChooseAllPhotos,
+      preparePhotos: preparePhotos,
     );
     if (defaultTargetPlatform != TargetPlatform.iOS) return fallback;
     return _IOSInlinePhotoPicker(
@@ -27,6 +30,7 @@ class _PhotoGalleryPicker extends StatelessWidget {
       onPickAllPhotos: onPickAllPhotos,
       onChoosePhotos: onChoosePhotos,
       onChooseAllPhotos: onChooseAllPhotos,
+      preparePhotos: preparePhotos,
       fallback: fallback,
     );
   }
@@ -37,12 +41,14 @@ class _RecentPhotoGalleryPicker extends HookConsumerWidget {
   final Future<List<XFile>> Function() onPickAllPhotos;
   final Future<void> Function(List<XFile> photos) onChoosePhotos;
   final Future<void> Function(List<XFile> photos) onChooseAllPhotos;
+  final Future<void> Function(Future<void> Function()) preparePhotos;
 
   const _RecentPhotoGalleryPicker({
     required this.onBack,
     required this.onPickAllPhotos,
     required this.onChoosePhotos,
     required this.onChooseAllPhotos,
+    required this.preparePhotos,
   });
 
   @override
@@ -68,7 +74,7 @@ class _RecentPhotoGalleryPicker extends HookConsumerWidget {
             ];
     }
 
-    Future<void> choosePhotos() async {
+    Future<void> choosePhotos() => preparePhotos(() async {
       if (isResolving.value) return;
       isResolving.value = true;
       actionError.value = null;
@@ -86,20 +92,22 @@ class _RecentPhotoGalleryPicker extends HookConsumerWidget {
       } catch (_) {
         if (context.mounted) {
           actionError.value = selection.value.isEmpty
-              ? 'Unable to open your photo library.'
-              : 'Unable to prepare the selected photos.';
+              ? 'Couldn’t open photo library'
+              : 'Couldn’t prepare photos';
         }
       } finally {
         if (context.mounted) isResolving.value = false;
       }
-    }
+    });
 
     final selectedCount = selection.value.length;
+    final hasVideos = selection.value.any((photo) => photo.isVideo);
+    final selectionNoun = hasVideos ? 'item' : 'photo';
     final actionLabel = selectedCount == 0
         ? 'All photos'
         : selectedCount == 1
-        ? 'Add 1 photo'
-        : 'Add $selectedCount photos';
+        ? 'Add 1 $selectionNoun'
+        : 'Add $selectedCount ${selectionNoun}s';
 
     Widget buildGalleryBody() {
       if (recentSnapshot.connectionState != ConnectionState.done) {
@@ -185,7 +193,7 @@ class _RecentPhotoGalleryPicker extends HookConsumerWidget {
                 Expanded(
                   child: Text(
                     'Recent photos',
-                    style: context.textTheme.titleSmall?.copyWith(
+                    style: bodyLargeTextStyle.copyWith(
                       color: context.colors.onSurface,
                       fontWeight: FontWeight.w600,
                     ),
@@ -196,7 +204,7 @@ class _RecentPhotoGalleryPicker extends HookConsumerWidget {
                     padding: const EdgeInsets.only(right: Grid.half),
                     child: Text(
                       '$selectedCount selected',
-                      style: context.textTheme.labelMedium?.copyWith(
+                      style: messageCaptionTextStyle.copyWith(
                         color: context.colors.onSurfaceVariant,
                       ),
                     ),
@@ -217,7 +225,7 @@ class _RecentPhotoGalleryPicker extends HookConsumerWidget {
                       child: Text(
                         error,
                         key: const ValueKey('photo-gallery-error'),
-                        style: context.textTheme.bodySmall?.copyWith(
+                        style: messageCaptionTextStyle.copyWith(
                           color: context.colors.error,
                         ),
                         textAlign: TextAlign.center,
@@ -287,12 +295,13 @@ class _RecentPhotoTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isSelected = selectionIndex >= 0;
+    final mediaName = photo.isVideo ? 'Video' : 'Photo';
     return Semantics(
       button: true,
       selected: isSelected,
       label: isSelected
-          ? 'Photo ${selectionIndex + 1} selected'
-          : 'Select photo',
+          ? '$mediaName ${selectionIndex + 1} selected'
+          : 'Select ${mediaName.toLowerCase()}',
       child: GestureDetector(
         key: ValueKey('recent-photo-${photo.id}'),
         behavior: HitTestBehavior.opaque,
@@ -308,6 +317,12 @@ class _RecentPhotoTile extends StatelessWidget {
                 gaplessPlayback: true,
               ),
             ),
+            if (photo.isVideo)
+              const Positioned(
+                left: Grid.half,
+                bottom: Grid.half,
+                child: Icon(BuzzIcons.video, color: Colors.white, size: 20),
+              ),
             AnimatedContainer(
               duration: reducedMotion
                   ? Duration.zero
@@ -352,9 +367,9 @@ class _RecentPhotoTile extends StatelessWidget {
                     ),
                     child: Text(
                       '${selectionIndex + 1}',
-                      style: context.textTheme.labelSmall?.copyWith(
+                      style: messageBylineTextStyle.copyWith(
                         color: context.colors.onPrimary,
-                        fontWeight: FontWeight.w700,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
                   ),
@@ -391,7 +406,7 @@ class _PhotoGalleryMessage extends StatelessWidget {
             const SizedBox(height: Grid.xxs),
             Text(
               title,
-              style: context.textTheme.titleSmall?.copyWith(
+              style: bodyLargeTextStyle.copyWith(
                 color: context.colors.onSurface,
               ),
               textAlign: TextAlign.center,
@@ -399,7 +414,7 @@ class _PhotoGalleryMessage extends StatelessWidget {
             const SizedBox(height: Grid.quarter),
             Text(
               message,
-              style: context.textTheme.bodySmall?.copyWith(
+              style: messageCaptionTextStyle.copyWith(
                 color: context.colors.onSurfaceVariant,
               ),
               textAlign: TextAlign.center,
