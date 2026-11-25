@@ -7,6 +7,7 @@ import {
   useInstallAcpAdapterMutation,
   useInstallAcpRuntimeMutation,
 } from "@/features/agents/hooks";
+import { useInstallOutputLine } from "@/features/agents/lib/useInstallOutputLine";
 import {
   agentToolSetupRuntimes,
   agentToolStatus,
@@ -14,7 +15,7 @@ import {
 } from "@/features/onboarding/agentToolSetup";
 import type { AcpRuntimeCatalogEntry } from "@/shared/api/types";
 import { getInstallErrorMessage } from "@/shared/lib/installError";
-import { BuzzMark } from "@/shared/ui/buzz-logo/BuzzMark";
+import { PairedCoreMark } from "@/shared/ui/buzz-logo/PairedCoreMark";
 import { Button } from "@/shared/ui/button";
 import { RuntimeIcon } from "./RuntimeIcon";
 import { useRuntimeSignIn } from "./useRuntimeSignIn";
@@ -25,6 +26,8 @@ type RowProps = {
   error: string | null;
   installed: boolean;
   installing: boolean;
+  /** Another runtime is installing: installs run one at a time. */
+  installBusy: boolean;
   onCheckAgain: () => void;
   onInstall: (mode: InstallMode) => void;
   runtime: AcpRuntimeCatalogEntry;
@@ -42,6 +45,7 @@ function Spinner({ label }: { label: string }) {
 
 function AgentToolRow({
   error,
+  installBusy,
   installed,
   installing,
   onCheckAgain,
@@ -53,6 +57,8 @@ function AgentToolRow({
     enabled: status.kind === "signed_out",
   });
   const label = runtime.label;
+  // The installer's latest output line (download, npm, …) as live progress.
+  const outputLine = useInstallOutputLine(runtime.id, installing);
 
   let detail: React.ReactNode;
   let action: React.ReactNode = null;
@@ -64,6 +70,23 @@ function AgentToolRow({
         ? `Installing ${label} and its adapter…`
         : "Installing adapter…";
     action = <Spinner label={`Installing ${label}`} />;
+    body = (
+      <div className="space-y-1.5">
+        <div
+          aria-hidden="true"
+          className="h-1 overflow-hidden rounded-full bg-muted"
+        >
+          <div className="h-full w-full animate-pulse rounded-full bg-primary/60" />
+        </div>
+        <p
+          aria-live="polite"
+          className="truncate font-mono text-2xs leading-4 text-muted-foreground"
+          data-testid={`agent-tool-${runtime.id}-install-output`}
+        >
+          {outputLine ?? "Starting…"}
+        </p>
+      </div>
+    );
   } else if (error) {
     detail = "Install failed";
     body = (
@@ -73,6 +96,7 @@ function AgentToolRow({
     );
     action = (
       <Button
+        disabled={installBusy}
         onClick={() =>
           onInstall(status.kind === "cli_missing" ? "full" : "adapter")
         }
@@ -122,7 +146,11 @@ function AgentToolRow({
         ) : null}
         <div className="flex flex-wrap items-center gap-3">
           {runtime.cliInstallCommand ? (
-            <Button onClick={() => onInstall("full")} size="sm">
+            <Button
+              disabled={installBusy}
+              onClick={() => onInstall("full")}
+              size="sm"
+            >
               Install {label}
             </Button>
           ) : null}
@@ -137,22 +165,26 @@ function AgentToolRow({
       </div>
     );
   } else if (status.kind === "signed_out") {
-    detail = signIn.didSignInCheckTimeOut
-      ? "Sign-in not detected yet"
-      : signIn.methodsFailed || signIn.connectFailed
-        ? "Couldn’t start sign-in. Try again."
-        : "Signed out";
+    detail = signIn.isWaitingForSignIn
+      ? "Finish signing in in the Terminal or browser window that opened."
+      : signIn.didSignInCheckTimeOut
+        ? "Sign-in not detected yet"
+        : signIn.connectFailed
+          ? "Couldn’t start sign-in. Try again."
+          : "Signed out";
     action = (
       <Button
-        disabled={signIn.isWaitingForSignIn}
-        onClick={signIn.start}
+        disabled={signIn.isWaitingForSignIn || signIn.isPreparing}
+        onClick={() => void signIn.start()}
         size="sm"
       >
-        {signIn.isWaitingForSignIn
-          ? "Waiting for sign-in…"
-          : signIn.didSignInCheckTimeOut
-            ? "Check again"
-            : `Sign in to ${label}`}
+        {signIn.isPreparing
+          ? "Preparing sign-in…"
+          : signIn.isWaitingForSignIn
+            ? "Waiting for sign-in…"
+            : signIn.didSignInCheckTimeOut
+              ? "Check again"
+              : `Sign in to ${label}`}
       </Button>
     );
   } else {
@@ -294,7 +326,7 @@ export function AgentToolSetupScreen({
         aria-labelledby="agent-tool-setup-title"
         className="w-full max-w-lg space-y-6"
       >
-        <BuzzMark className="h-10 w-auto" />
+        <PairedCoreMark className="h-12 w-12" />
         <header className="space-y-2">
           <p className="text-sm text-muted-foreground">{workspaceName}</p>
           <h1 className="text-2xl font-semibold" id="agent-tool-setup-title">
@@ -320,6 +352,7 @@ export function AgentToolSetupScreen({
             {runtimes.map((runtime) => (
               <AgentToolRow
                 error={errors[runtime.id] ?? null}
+                installBusy={installing !== null && installing !== runtime.id}
                 installed={installed.has(runtime.id)}
                 installing={installing === runtime.id}
                 key={runtime.id}

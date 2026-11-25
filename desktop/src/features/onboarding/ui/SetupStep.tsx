@@ -148,7 +148,7 @@ function RuntimeStatus({
           aria-label={`Sign in to ${runtime.label}`}
           className="h-7 shrink-0 rounded-full bg-foreground px-3 text-xs font-normal text-background shadow-none hover:bg-foreground/85 hover:text-background"
           data-testid={`onboarding-runtime-instructions-${runtime.id}`}
-          onClick={signIn.start}
+          onClick={() => void signIn.start()}
           type="button"
           variant="ghost"
         >

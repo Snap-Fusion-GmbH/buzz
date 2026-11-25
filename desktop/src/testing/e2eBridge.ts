@@ -13867,6 +13867,9 @@ export function maybeInstallE2eTauriMocks() {
           payload as { runtimeId?: string },
           activeConfig,
         );
+      case "launch_cli_login":
+        mockConnectCompleted = true;
+        return { launched: true };
       case "connect_acp_runtime":
         return handleConnectAcpRuntime(
           payload as { request?: { runtimeId?: string; methodId?: string } },

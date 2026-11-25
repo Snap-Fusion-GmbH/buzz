@@ -40,9 +40,9 @@ function CursorMark({ className }: MarkProps) {
 }
 
 /// Theme-adaptive inline marks, keyed by runtime/preset id. Consulted before
-/// the bitmap logo maps in `RuntimeIcon`. Codex deliberately has no entry:
-/// the OpenAI blossom was removed from simple-icons v16 at the vendor's
-/// request, so Codex renders RuntimeIcon's neutral terminal-glyph fallback.
+/// the bitmap logo maps in `RuntimeIcon`. Codex has no entry: its mark is
+/// OpenAI's official Blossom, which must be used exactly as provided, so it is
+/// a black-on-white bitmap logo in `RuntimeIcon` rather than a recolored path.
 export const RUNTIME_MARKS: Record<string, React.FC<MarkProps>> = {
   cursor: CursorMark,
   goose: GooseMark,

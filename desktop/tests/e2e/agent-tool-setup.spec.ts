@@ -111,6 +111,8 @@ test("first sign-in installs a missing adapter and asks before installing a CLI"
         CODEX_NOT_INSTALLED,
         BUZZ_AGENT,
       ],
+      installAcpRuntimeOutputLines: ["added 12 packages in 3s"],
+      installAcpRuntimeDelayMs: 1_500,
     },
     {
       skipCommunitySeed: true,
@@ -123,6 +125,10 @@ test("first sign-in installs a missing adapter and asks before installing a CLI"
 
   const setup = page.getByTestId("agent-tool-setup");
   await expect(setup).toBeVisible();
+  // While the adapter installs, the installer's latest output is the progress.
+  await expect(page.getByTestId("agent-tool-claude-install-output")).toHaveText(
+    "added 12 packages in 3s",
+  );
   // The adapter installs on its own because the Claude Code CLI is present.
   await expect(page.getByTestId("agent-tool-claude-status")).toHaveText(
     "Ready",
@@ -130,6 +136,11 @@ test("first sign-in installs a missing adapter and asks before installing a CLI"
   // Codex's CLI is missing: Buzz shows the vendor installer and waits.
   const codex = page.getByTestId("agent-tool-codex");
   await expect(codex).toContainText("Not installed on this computer");
+  // Codex shows OpenAI's Blossom, not the generic terminal fallback.
+  await expect(codex.locator("img")).toHaveAttribute(
+    "src",
+    /^data:image\/svg\+xml/,
+  );
   await expect(codex).toContainText(
     "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
   );
@@ -177,4 +188,57 @@ test("skipping leaves every install to the user", async ({ page }) => {
   await page.getByRole("button", { name: "Skip for now" }).click();
   await expect(page.getByTestId("app-sidebar")).toBeVisible();
   expect(await installCalls(page)).toEqual([]);
+});
+
+test("a signed-out CLI without adapter sign-in methods opens the CLI's own login", async ({
+  page,
+}) => {
+  const signedOut = { ...CLAUDE_READY, auth_status: { status: "logged_out" } };
+  await installMockBridge(
+    page,
+    {
+      managedWorkspace: { status: signedIn },
+      // The real Claude adapter advertises no ACP auth method while signed
+      // out; the mock's default `acpAuthMethods` is empty too.
+      acpRuntimesCatalog: [signedOut, BUZZ_AGENT],
+      acpRuntimesCatalogAfterConnect: [CLAUDE_READY, BUZZ_AGENT],
+    },
+    {
+      skipCommunitySeed: true,
+      skipOnboardingSeed: true,
+      relayWsUrl: "wss://managed.example.invalid",
+      seedAgentToolSetupDone: false,
+    },
+  );
+  await page.goto("/");
+
+  const claude = page.getByTestId("agent-tool-claude");
+  await expect(page.getByTestId("agent-tool-claude-status")).toHaveText(
+    "Signed out",
+  );
+  await claude.getByRole("button", { name: "Sign in to Claude Code" }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (
+          (
+            window as Window & {
+              __BUZZ_E2E_COMMAND_LOG__?: Array<{
+                command: string;
+                payload: unknown;
+              }>;
+            }
+          ).__BUZZ_E2E_COMMAND_LOG__ ?? []
+        )
+          .filter((entry) => entry.command === "launch_cli_login")
+          .map((entry) => entry.payload),
+      ),
+    )
+    .toEqual([{ runtimeId: "claude" }]);
+  // Polling picks up the completed sign-in.
+  await expect(page.getByTestId("agent-tool-claude-status")).toHaveText(
+    "Ready",
+    { timeout: 15_000 },
+  );
+  await expect(page.getByRole("button", { name: "Open Buzz" })).toBeEnabled();
 });

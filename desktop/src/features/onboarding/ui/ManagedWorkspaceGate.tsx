@@ -24,7 +24,7 @@ import {
   type ManagedWorkspaceStatus,
   signInManagedWorkspace,
 } from "@/shared/api/tauriManagedWorkspace";
-import { BuzzMark } from "@/shared/ui/buzz-logo/BuzzMark";
+import { PairedCoreMark } from "@/shared/ui/buzz-logo/PairedCoreMark";
 import { Button } from "@/shared/ui/button";
 
 export function ManagedWorkspaceGate({ children }: { children: ReactNode }) {
@@ -188,7 +188,7 @@ export function ManagedWorkspaceGate({ children }: { children: ReactNode }) {
       data-testid="managed-workspace-gate"
     >
       <div className="w-full max-w-sm space-y-6">
-        <BuzzMark className="h-10 w-auto" />
+        <PairedCoreMark className="h-12 w-12" />
         <header className="space-y-2">
           <h1 className="text-2xl font-semibold">Buzz</h1>
           <p className="text-sm text-muted-foreground">Snap Fusion / R&amp;D</p>

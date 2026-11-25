@@ -5,6 +5,7 @@ import type { AcpRuntimeCatalogEntry } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { BuzzMark } from "@/shared/ui/buzz-logo/BuzzMark";
 import claudeLogoUrl from "../assets/harness-logos/claude.png?inline";
+import codexLogoUrl from "../assets/harness-logos/codex.svg?inline";
 import { RUNTIME_MARKS } from "./HarnessMarks";
 
 // Bundled logos for compiled-in runtimes (inline base64, no network fetch).
@@ -12,6 +13,8 @@ import { RUNTIME_MARKS } from "./HarnessMarks";
 // `currentColor`, so they adapt to dark/light without bitmap filters.
 const RUNTIME_LOGOS: Record<string, string> = {
   claude: claudeLogoUrl,
+  // OpenAI's official Blossom, black as provided, so it sits on a white tile.
+  codex: codexLogoUrl,
 };
 
 // Public-path logos for bundled presets. Served from /harness-logos/ at runtime.
@@ -75,7 +78,7 @@ export function RuntimeIcon({
           "rounded-md object-contain",
           className,
           id === "omp" && "bg-[#0d0d0d] p-1",
-          id === "grok" && "bg-white p-1",
+          (id === "grok" || id === "codex") && "bg-white p-1",
         )}
         onError={() => setImageFailed(true)}
         src={imageUrl}

@@ -67,6 +67,39 @@ pub async fn connect_acp_runtime(
         .map_err(|error| format!("connect-account task failed: {error}"))?
 }
 
+/// Open a visible terminal running the vendor CLI's own login, for adapters
+/// that advertise no ACP auth method (a signed-out Claude Code CLI does this).
+/// Buzz only starts the vendor's login; it never sees the credentials.
+#[tauri::command]
+pub async fn launch_cli_login(runtime_id: String) -> Result<ConnectAcpRuntimeResult, String> {
+    tokio::task::spawn_blocking(move || launch_cli_login_blocking(&runtime_id))
+        .await
+        .map_err(|error| format!("CLI login task failed: {error}"))?
+}
+
+/// The vendor CLI subcommand that signs a user in interactively.
+fn cli_login_args(runtime_id: &str) -> Option<&'static [&'static str]> {
+    match runtime_id {
+        "claude" => Some(&["auth", "login"]),
+        "codex" => Some(&["login"]),
+        _ => None,
+    }
+}
+
+fn launch_cli_login_blocking(runtime_id: &str) -> Result<ConnectAcpRuntimeResult, String> {
+    let runtime = known_acp_runtime_exact(runtime_id)
+        .ok_or_else(|| format!("unknown ACP runtime: {runtime_id}"))?;
+    let (Some(cli), Some(args)) = (runtime.underlying_cli, cli_login_args(runtime_id)) else {
+        return Err(format!("{} has no CLI login command", runtime.label));
+    };
+    let path = resolve_command(cli).ok_or_else(|| format!("{} is not installed", runtime.label))?;
+    let argv: Vec<String> = std::iter::once(path.display().to_string())
+        .chain(args.iter().map(|arg| (*arg).to_string()))
+        .collect();
+    launch_visible_terminal(&argv)?;
+    Ok(ConnectAcpRuntimeResult { launched: true })
+}
+
 fn discover_acp_auth_methods_blocking(runtime_id: &str) -> Result<AcpAuthMethodsResult, String> {
     let output = run_buzz_acp_auth_command(runtime_id, ["auth-methods", "--json"])?;
     if !output.status.success() {
@@ -461,10 +494,17 @@ fn shell_escape(arg: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        adapter_terminal_argv, append_inherited_path, is_claude_subscription_login,
+        adapter_terminal_argv, append_inherited_path, cli_login_args, is_claude_subscription_login,
         run_buzz_acp_auth_command_with_paths, shell_escape, shell_join, uses_terminal_auth,
         windows_terminal_args, AcpAuthMethod,
     };
+
+    #[test]
+    fn cli_login_runs_each_vendors_own_login_subcommand() {
+        assert_eq!(cli_login_args("claude"), Some(&["auth", "login"][..]));
+        assert_eq!(cli_login_args("codex"), Some(&["login"][..]));
+        assert_eq!(cli_login_args("goose"), None);
+    }
 
     /// Windows regression: the augmented PATH there holds only Buzz-managed
     /// dirs and the exe parent (no login-shell PATH, no managed Node), so the

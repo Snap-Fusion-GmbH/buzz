@@ -4,6 +4,7 @@ import {
   useAcpAuthMethodsQuery,
   useAcpRuntimesQueryForced,
   useConnectAcpRuntimeMutation,
+  useLaunchCliLoginMutation,
 } from "@/features/agents/hooks";
 import type { AcpAuthMethod, AcpRuntimeCatalogEntry } from "@/shared/api/types";
 import { runtimeIsReadyForOnboarding } from "./onboardingRuntimeSelection";
@@ -74,6 +75,8 @@ export function useRuntimeSignIn(
     enabled: shouldSignIn && enabled,
   });
   const connectMutation = useConnectAcpRuntimeMutation();
+  const cliLoginMutation = useLaunchCliLoginMutation();
+  const [isPreparing, setIsPreparing] = React.useState(false);
   const runtimesQuery = useAcpRuntimesQueryForced({ forceOnMount: false });
   const [isWaitingForSignIn, setIsWaitingForSignIn] = React.useState(false);
   const [didSignInCheckTimeOut, setDidSignInCheckTimeOut] =
@@ -107,29 +110,50 @@ export function useRuntimeSignIn(
     getOnboardingAuthMethods(runtime, methodsQuery.data?.methods ?? [])[0] ??
     null;
 
-  const start = () => {
+  const start = async () => {
     if (didSignInCheckTimeOut) {
       setDidSignInCheckTimeOut(false);
       setIsWaitingForSignIn(true);
       void runtimesQuery.forceRefresh();
       return;
     }
-    if (!authMethod) {
-      void methodsQuery.refetch();
+    let method = authMethod;
+    if (!method) {
+      // The click may beat (or follow a failed) method discovery: fetch once
+      // more rather than drop the click.
+      setIsPreparing(true);
+      try {
+        const refreshed = await methodsQuery.refetch();
+        method =
+          getOnboardingAuthMethods(runtime, refreshed.data?.methods ?? [])[0] ??
+          null;
+      } finally {
+        setIsPreparing(false);
+      }
+    }
+    const onSuccess = () => setIsWaitingForSignIn(true);
+    if (method) {
+      connectMutation.mutate(
+        { methodId: method.id, runtimeId: runtime.id },
+        { onSuccess },
+      );
       return;
     }
-    connectMutation.mutate(
-      { methodId: authMethod.id, runtimeId: runtime.id },
-      { onSuccess: () => setIsWaitingForSignIn(true) },
-    );
+    // The adapter advertises no sign-in method (a signed-out Claude Code CLI
+    // does this): run the vendor CLI's own login in a terminal instead.
+    cliLoginMutation.mutate(runtime.id, { onSuccess });
   };
 
   return {
     shouldSignIn,
     isWaitingForSignIn,
+    isPreparing:
+      isPreparing || connectMutation.isPending || cliLoginMutation.isPending,
     didSignInCheckTimeOut,
     start,
     methodsFailed: methodsQuery.error instanceof Error,
-    connectFailed: connectMutation.error instanceof Error,
+    connectFailed:
+      connectMutation.error instanceof Error ||
+      cliLoginMutation.error instanceof Error,
   };
 }

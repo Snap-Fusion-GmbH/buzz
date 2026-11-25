@@ -45,6 +45,18 @@ export async function discoverAcpAuthMethods(
   return { methods: raw.methods.map(fromRawAcpAuthMethod) };
 }
 
+/**
+ * Open a terminal running the vendor CLI's own login, for runtimes whose
+ * adapter advertises no ACP auth method. Buzz never sees the credentials.
+ */
+export async function launchCliLogin(
+  runtimeId: string,
+): Promise<ConnectAcpRuntimeResult> {
+  return invokeTauri<RawConnectAcpRuntimeResult>("launch_cli_login", {
+    runtimeId,
+  });
+}
+
 export async function connectAcpRuntime(
   runtimeId: string,
   methodId: string,

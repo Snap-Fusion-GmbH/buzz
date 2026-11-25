@@ -28,9 +28,13 @@ Monochrome marks inlined as `currentColor` paths in
 | Goose | [block/goose](https://github.com/block/goose) | `305849b71709b95b86ed9f11bd3bc939899c0aab` | Apache-2.0 © Block, Inc. | `documentation/static/img/goose.svg` | `fill="#101010"` → `currentColor`; dropped the redundant clipPath wrapper |
 | Cursor | [simple-icons](https://github.com/simple-icons/simple-icons) | `16.27.1` (slug `cursor`) | CC0-1.0 (path data); nominative use of the Cursor mark to identify Cursor's harness | `icons/cursor.svg` | `fill` → `currentColor` |
 
-Codex deliberately has **no** bundled mark: the OpenAI blossom was removed
-from simple-icons in v16 at the vendor's request, so we do not ship it —
-Codex renders `RuntimeIcon`'s neutral terminal-glyph fallback instead.
+Codex is not a `RUNTIME_MARKS` entry: the OpenAI blossom was removed from
+simple-icons in v16 at the vendor's request. It instead ships OpenAI's own
+asset, unrecolored, as a builtin bitmap logo:
+
+| File | Upstream | Retrieved | License | Source path | Modifications |
+|---|---|---|---|---|---|
+| `src/features/onboarding/assets/harness-logos/codex.svg` | [OpenAI brand guidelines](https://openai.com/brand/) | 2026-11-25 | OpenAI trademark; brand guidelines permit the logo where it directly relates to OpenAI services, used exactly as provided — here, to identify the Codex harness | Brand page `Blossom_Light.svg` (the standalone Blossom beside the clear-space diagram) | Kept only the standalone Blossom path, unchanged and black; cropped the canvas around it with clear space. Rendered on a white tile, like `grok.svg` |
 
 `amp.png` and `opencode.svg` predate this file; their provenance was not
 recorded when they were added. Cursor previously used the generic terminal

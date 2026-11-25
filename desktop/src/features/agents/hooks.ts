@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   connectAcpRuntime,
   discoverAcpAuthMethods,
+  launchCliLogin,
 } from "@/shared/api/tauriAgentAuth";
 import {
   attachManagedAgentToChannel,
@@ -266,6 +267,16 @@ export function useAcpAuthMethodsQuery(
     queryKey: [...acpAuthMethodsQueryKey, runtimeId],
     queryFn: () => discoverAcpAuthMethods(runtimeId),
     staleTime: 30_000,
+  });
+}
+
+export function useLaunchCliLoginMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (runtimeId: string) => launchCliLogin(runtimeId),
+    onSettled: () => {
+      void refreshAcpRuntimes(queryClient);
+    },
   });
 }
 
