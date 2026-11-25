@@ -365,16 +365,37 @@ fn profile_target_dirs(root: &Path) -> [PathBuf; 2] {
 }
 
 fn command_search_dirs() -> Vec<PathBuf> {
-    let mut dirs = profile_target_dirs(&workspace_root_dir()).to_vec();
-    if let Ok(current_dir) = std::env::current_dir() {
-        dirs.extend(profile_target_dirs(&current_dir));
-    }
-
-    dirs.extend(
+    ordered_command_search_dirs(
+        !cfg!(debug_assertions),
+        &workspace_root_dir(),
+        std::env::current_dir().ok().as_deref(),
         std::env::current_exe()
             .ok()
-            .and_then(|path| path.parent().map(Path::to_path_buf)),
-    );
+            .and_then(|path| path.parent().map(Path::to_path_buf))
+            .as_deref(),
+    )
+}
+
+/// Sidecar search order. A packaged release resolves its own bundled
+/// sidecars (next to the executable) first: the compile-time workspace path
+/// still exists on the machine that built it, and its `target/` may hold
+/// stale binaries from an older build. Development keeps workspace-first so
+/// `just dev` picks up freshly built sidecars.
+fn ordered_command_search_dirs(
+    release: bool,
+    workspace_root: &Path,
+    current_dir: Option<&Path>,
+    exe_dir: Option<&Path>,
+) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if release {
+        dirs.extend(exe_dir.map(Path::to_path_buf));
+    }
+    dirs.extend(profile_target_dirs(workspace_root));
+    if let Some(current_dir) = current_dir {
+        dirs.extend(profile_target_dirs(current_dir));
+    }
+    dirs.extend(exe_dir.map(Path::to_path_buf));
     dirs.into_iter().fold(Vec::new(), |mut unique, dir| {
         if !unique.contains(&dir) {
             unique.push(dir);
@@ -1263,6 +1284,8 @@ pub fn managed_agent_avatar_url(command: &str) -> Option<String> {
     Some(runtime.avatar_url.to_string())
 }
 
+#[cfg(test)]
+mod command_search_tests;
 #[cfg(test)]
 mod installer_command_tests;
 #[cfg(test)]
