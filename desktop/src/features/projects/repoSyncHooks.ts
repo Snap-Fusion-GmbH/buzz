@@ -12,20 +12,64 @@ import type {
   Repository as Project,
 } from "@/features/projects/hooks";
 import { useProjectRepoHost } from "@/features/projects/useProjectRepoHost";
+import { uploadNoticeContent } from "@/features/projects/lib/uploadNotice";
+import { sendChannelMessage } from "@/shared/api/tauriMessages";
 import { useFocusedRefetchInterval } from "@/shared/lib/useDocumentVisible";
 import { publishProjectPullRequestUpdate } from "./pullRequestMutations";
 
-export function useUploadProjectFilesMutation(reposDir?: string | null) {
+/** Where an upload is announced, captured when the user starts it. */
+export type UploadNoticeTarget = {
+  channelId: string;
+  relayScope: string | null;
+  signerScope: string | null;
+};
+
+/**
+ * Pick, commit and push files, then announce them in the project channel so
+ * people and agents there learn the repository changed. The push is the
+ * user's commit: a failed notice is reported in `noticeError`, never as a
+ * failed upload.
+ */
+export function useUploadProjectFilesMutation(
+  reposDir?: string | null,
+  notice?: UploadNoticeTarget | null,
+) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (project: Project) => {
+    mutationFn: async (project: Project) => {
       if (!project.cloneUrls[0]) throw new Error("No repository selected.");
-      return pickAndUploadProjectFiles({
+      // Capture the target before the file picker suspends this call.
+      const target = notice ?? null;
+      const upload = await pickAndUploadProjectFiles({
         reposDir,
         projectDtag: project.dtag,
         cloneUrl: project.cloneUrls[0],
         defaultBranch: project.defaultBranch,
       });
+      if (!upload) return null;
+      let noticeError: string | null = null;
+      if (target) {
+        try {
+          await sendChannelMessage(
+            target.channelId,
+            uploadNoticeContent(upload, project.name || project.dtag),
+            null,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            target.relayScope ?? undefined,
+            target.signerScope ?? undefined,
+          );
+        } catch (reason) {
+          noticeError =
+            reason instanceof Error ? reason.message : String(reason);
+        }
+      }
+      return { upload, noticeError };
     },
     onSuccess: async (result, project) => {
       if (!result) return;

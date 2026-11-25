@@ -20,6 +20,8 @@ import { ProjectSelectionProvider } from "@/features/projects/lib/useProjectSele
 import { useHealProjectHomeRepositories } from "@/features/projects/useHealProjectHomeRepositories";
 import { useUploadProjectFilesMutation } from "@/features/projects/repoSyncHooks";
 import { useIdentityQuery } from "@/shared/api/hooks";
+import { normalizeRelayUrl } from "@/shared/lib/normalizeRelayUrl";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import type { RelayEvent } from "@/shared/api/types";
 import type { EntityLinkTab } from "@/shared/lib/entityLink";
 import { useThreadPanelWidth } from "@/shared/hooks/useThreadPanelWidth";
@@ -120,8 +122,17 @@ export function ProjectChannelHome({
   const [summaryOpen, setSummaryOpen] = React.useState(true);
   const [addRepositoryOpen, setAddRepositoryOpen] = React.useState(false);
   const [fileRepositoryOpen, setFileRepositoryOpen] = React.useState(false);
+  const relayScope = activeCommunity?.relayUrl
+    ? normalizeRelayUrl(activeCommunity.relayUrl)
+    : null;
+  const signerScope = identityQuery.data?.pubkey
+    ? normalizePubkey(identityQuery.data.pubkey)
+    : null;
   const uploadFilesMutation = useUploadProjectFilesMutation(
     activeCommunity?.reposDir,
+    project.projectChannelId
+      ? { channelId: project.projectChannelId, relayScope, signerScope }
+      : null,
   );
   const uploadFiles = uploadFilesMutation.mutate;
   const uploadPending = uploadFilesMutation.isPending;
@@ -260,10 +271,16 @@ export function ProjectChannelHome({
     if (uploadFilesMutation.isSuccess) {
       const result = uploadFilesMutation.data;
       if (result) {
+        const { upload, noticeError } = result;
         toast.success(
-          `Added ${result.files.length === 1 ? result.files[0] : `${result.files.length} files`} in commit ${result.commit.slice(0, 7)}.`,
+          `Added ${upload.files.length === 1 ? upload.files[0] : `${upload.files.length} files`} in commit ${upload.commit.slice(0, 7)}.`,
           { id: "project-file-upload" },
         );
+        if (noticeError) {
+          toast.warning("The files were added, but the channel wasn’t told", {
+            description: noticeError,
+          });
+        }
       } else {
         toast.dismiss("project-file-upload");
       }

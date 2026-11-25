@@ -1039,6 +1039,14 @@ test("commit detail opens from the commits feed with a diff", async ({
   await expect(
     page.getByText("Added 2 files in commit abcdef0."),
   ).toBeVisible();
+  // The project channel hears about the files too, so people and agents
+  // there know the repository changed.
+  await expect(
+    page
+      .getByTestId("message-row")
+      .filter({ hasText: "Added 2 files to buzz (commit abcdef0)" })
+      .filter({ hasText: "artifacts.zip, verification.json" }),
+  ).toHaveCount(1);
   await expect
     .poll(() =>
       page.evaluate(
