@@ -327,7 +327,7 @@ fn has_system_prompt_support(
     }
 }
 
-fn session_new_system_prompt<'a>(
+pub(crate) fn session_new_system_prompt<'a>(
     is_goose: bool,
     protocol_version: u32,
     agent_name: &str,

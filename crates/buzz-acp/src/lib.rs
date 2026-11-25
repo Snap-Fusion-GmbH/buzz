@@ -6067,10 +6067,19 @@ fn spawn_respawn_task(
     true
 }
 
-fn normalized_agent_name(init_result: &serde_json::Value) -> String {
+/// The agent's self-description in an `initialize` result: ACP v2 `info`,
+/// then the older `agentInfo` / MCP-heritage `serverInfo`. Claude's adapter
+/// 0.112+ answers v2 with `info` only; missing it made the runtime treat
+/// Claude as an unknown agent and send a system prompt Claude rejects.
+fn initialize_agent_info(init_result: &serde_json::Value) -> Option<&serde_json::Value> {
     init_result
-        .get("agentInfo")
+        .get("info")
+        .or_else(|| init_result.get("agentInfo"))
         .or_else(|| init_result.get("serverInfo"))
+}
+
+fn normalized_agent_name(init_result: &serde_json::Value) -> String {
+    initialize_agent_info(init_result)
         .and_then(|info| info.get("name"))
         .and_then(|value| value.as_str())
         .unwrap_or("unknown")
@@ -6136,9 +6145,7 @@ async fn initialize_agent_pool(
                             init_result["protocolVersion"].as_u64().unwrap_or(1) as u32;
                         tracing::info!(
                             agent = i,
-                            name = init_result
-                                .get("agentInfo")
-                                .or_else(|| init_result.get("serverInfo"))
+                            name = initialize_agent_info(&init_result)
                                 .and_then(|info| info.get("name"))
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("unknown"),
@@ -6408,10 +6415,7 @@ async fn run_models(args: ModelsArgs) -> Result<()> {
 
     // Extract agent info from initialize response.
     // ACP spec uses "serverInfo" (MCP heritage); some agents may use "agentInfo".
-    let info_obj = init_result
-        .get("info")
-        .or_else(|| init_result.get("serverInfo"))
-        .or_else(|| init_result.get("agentInfo"));
+    let info_obj = initialize_agent_info(&init_result);
     let agent_name = info_obj
         .and_then(|ai| ai.get("name"))
         .and_then(|v| v.as_str())
@@ -10797,6 +10801,18 @@ mod error_outcome_emission_tests {
             })),
             "buzz-agent"
         );
+        // ACP v2 (claude-agent-acp 0.112+): `info` only. An unknown name sends
+        // Claude the generic systemPrompt field, which it rejects (-32602).
+        let claude_v2 = serde_json::json!({
+            "protocolVersion": 2,
+            "info": { "name": "@agentclientprotocol/claude-agent-acp", "version": "0.112.0" }
+        });
+        let name = normalized_agent_name(&claude_v2);
+        assert_eq!(name, "@agentclientprotocol/claude-agent-acp");
+        assert!(matches!(
+            crate::pool::session_new_system_prompt(false, 2, &name, Some("be brief")),
+            Some(crate::acp::SystemPromptTransport::ClaudeMeta("be brief"))
+        ));
     }
 
     /// Spawn a real but inert agent subprocess (`cat`) so the error paths have
