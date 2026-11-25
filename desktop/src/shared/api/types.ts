@@ -516,6 +516,11 @@ export type AcpRuntimeCatalogEntry = {
   maxRoundsEnvVar: string | null;
   installHint: string;
   installInstructionsUrl: string;
+  /**
+   * The vendor CLI installer an install runs when the CLI is missing, shown
+   * verbatim for consent. Null/absent when Buzz has none for this OS.
+   */
+  cliInstallCommand?: string | null;
   canAutoInstall: boolean;
   /** True when the runtime depends on a separately installed vendor CLI. */
   requiresExternalCli: boolean;

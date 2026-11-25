@@ -1053,6 +1053,10 @@ fn discover_acp_runtime_phase1(runtime: &'static KnownAcpRuntime, force: bool) -
             max_rounds_env_var: runtime.max_rounds_env_var.map(str::to_string),
             install_hint,
             install_instructions_url: install_instructions_url.to_string(),
+            cli_install_command: runtime
+                .cli_install_commands_for_os()
+                .first()
+                .map(|command| (*command).to_string()),
             can_auto_install,
             requires_external_cli: runtime.underlying_cli.is_some(),
             underlying_cli_path,
@@ -1193,6 +1197,7 @@ pub fn discover_acp_runtimes_from(
                 max_rounds_env_var: None,
                 install_hint: def.install_hint.clone(),
                 install_instructions_url: def.install_instructions_url.clone(),
+                cli_install_command: None,
                 // Security line: custom definitions carry no install scripts.
                 can_auto_install: false,
                 requires_external_cli: false,
@@ -1258,5 +1263,7 @@ pub fn managed_agent_avatar_url(command: &str) -> Option<String> {
     Some(runtime.avatar_url.to_string())
 }
 
+#[cfg(test)]
+mod installer_command_tests;
 #[cfg(test)]
 mod tests;

@@ -88,6 +88,7 @@ pub(super) fn preset_catalog_entry(
         max_rounds_env_var: None,
         install_hint,
         install_instructions_url: install_instructions_url.to_string(),
+        cli_install_command: None,
         can_auto_install: false,
         requires_external_cli: def.underlying_cli.is_some(),
         underlying_cli_path,

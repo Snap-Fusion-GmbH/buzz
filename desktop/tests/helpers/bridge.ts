@@ -3,6 +3,7 @@ import type { ChannelTemplate, RelayEvent } from "../../src/shared/api/types";
 import type { MockManagedAgentSeed } from "../../src/testing/e2eBridge";
 import type { ManagedWorkspaceStatus } from "../../src/shared/api/tauriManagedWorkspace";
 import { DEPRECATION_BANNER_STORAGE_KEY } from "../../src/app/deprecationBannerVisibility";
+import { AGENT_TOOL_SETUP_STORAGE_KEY } from "../../src/features/onboarding/agentToolSetup";
 import { FEATURE_OVERRIDES_STORAGE_KEY, PREVIEW_FEATURE_IDS } from "./features";
 
 export const TEST_IDENTITIES = {
@@ -691,6 +692,11 @@ type BridgeOptions = {
    * that exercise the banner itself.
    */
   seedDeprecationBannerDismissed?: boolean;
+  /**
+   * When true (default), mark the managed first-run agent tool setup as done
+   * so managed specs land in the app. Set to false in specs that exercise it.
+   */
+  seedAgentToolSetupDone?: boolean;
   user?: keyof typeof TEST_IDENTITIES;
 };
 
@@ -940,6 +946,11 @@ export async function installBridge(page: Page, options: BridgeOptions) {
   if (options.seedDeprecationBannerDismissed !== false) {
     await seedDeprecationBannerDismissed(page);
   }
+  if (options.seedAgentToolSetupDone !== false) {
+    await page.addInitScript((key) => {
+      window.localStorage.setItem(key, String(Date.now()));
+    }, AGENT_TOOL_SETUP_STORAGE_KEY);
+  }
 
   await page.addInitScript(
     ({
@@ -1045,6 +1056,7 @@ export async function installMockBridge(
     skipCommunitySeed?: boolean;
     seedPreviewFeatures?: boolean;
     seedDeprecationBannerDismissed?: boolean;
+    seedAgentToolSetupDone?: boolean;
   },
 ) {
   await installBridge(page, {
@@ -1056,6 +1068,7 @@ export async function installMockBridge(
     skipCommunitySeed: options?.skipCommunitySeed,
     seedPreviewFeatures: options?.seedPreviewFeatures,
     seedDeprecationBannerDismissed: options?.seedDeprecationBannerDismissed,
+    seedAgentToolSetupDone: options?.seedAgentToolSetupDone,
   });
 }
 

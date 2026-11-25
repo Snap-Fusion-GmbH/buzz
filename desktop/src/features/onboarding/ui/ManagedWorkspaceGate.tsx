@@ -10,6 +10,11 @@ import {
 import { useCommunities } from "@/features/communities/useCommunities";
 import { markCommunityOnboardingComplete } from "@/features/onboarding/communityOnboarding";
 import { markMachineOnboardingComplete } from "@/features/onboarding/machineOnboarding";
+import {
+  agentToolSetupCompleted,
+  markAgentToolSetupCompleted,
+} from "@/features/onboarding/agentToolSetup";
+import { AgentToolSetupScreen } from "@/features/onboarding/ui/AgentToolSetupScreen";
 import { KeyringLockedScreen } from "@/features/onboarding/ui/KeyringLockedScreen";
 import { RelaunchRequiredScreen } from "@/features/onboarding/ui/RelaunchRequiredScreen";
 import { ResetFailedScreen } from "@/features/onboarding/ui/ResetFailedScreen";
@@ -29,6 +34,7 @@ export function ManagedWorkspaceGate({ children }: { children: ReactNode }) {
   const [reauthRequired, setReauthRequired] = useState(false);
   const [pending, setPending] = useState(false);
   const [prepared, setPrepared] = useState<string | null>(null);
+  const [agentToolsDone, setAgentToolsDone] = useState(agentToolSetupCompleted);
   const generation = useRef(0);
   const pendingRef = useRef(false);
   const checkingRef = useRef(false);
@@ -160,7 +166,21 @@ export function ManagedWorkspaceGate({ children }: { children: ReactNode }) {
   if (recovery === "reset-failed") return <ResetFailedScreen />;
   if (recovery === "relaunch") return <RelaunchRequiredScreen />;
   if (status?.enabled === false) return <>{children}</>;
-  if (readyKey && readyKey === prepared) return <>{children}</>;
+  if (readyKey && readyKey === prepared) {
+    // Offered once per computer, right after the first verified sign-in.
+    if (!agentToolsDone && status?.profile) {
+      return (
+        <AgentToolSetupScreen
+          onDone={() => {
+            markAgentToolSetupCompleted();
+            setAgentToolsDone(true);
+          }}
+          workspaceName={status.profile.workspace_name}
+        />
+      );
+    }
+    return <>{children}</>;
+  }
 
   return (
     <main

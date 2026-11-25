@@ -293,6 +293,19 @@ export function useInstallAcpRuntimeMutation() {
   });
 }
 
+/** Install only a runtime's ACP adapter; never runs a vendor CLI installer. */
+export function useInstallAcpAdapterMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (runtimeId: string) =>
+      installAcpRuntime(runtimeId, { adapterOnly: true }),
+    onSettled: () => {
+      void refreshAcpRuntimes(queryClient);
+      void queryClient.invalidateQueries({ queryKey: managedAgentsQueryKey });
+    },
+  });
+}
+
 export function useSaveCustomHarnessMutation() {
   const queryClient = useQueryClient();
   return useMutation({

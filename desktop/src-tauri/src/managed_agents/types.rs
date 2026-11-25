@@ -702,6 +702,11 @@ pub struct AcpRuntimeCatalogEntry {
     pub max_rounds_env_var: Option<String>,
     pub install_hint: String,
     pub install_instructions_url: String,
+    /// The vendor CLI installer `install_acp_runtime` runs when the CLI is
+    /// missing, shown verbatim so the user can consent to it. `None` when Buzz
+    /// has no CLI installer for this runtime on this OS.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cli_install_command: Option<String>,
     /// true when at least one automated install step is available
     pub can_auto_install: bool,
     /// true when this runtime depends on a separately installed vendor CLI.

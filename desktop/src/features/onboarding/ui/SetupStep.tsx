@@ -3,14 +3,12 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { Check, ChevronRight, ExternalLink } from "lucide-react";
 
 import {
-  useAcpAuthMethodsQuery,
   useAcpRuntimesQueryForced,
-  useConnectAcpRuntimeMutation,
   useInstallAcpRuntimeMutation,
 } from "@/features/agents/hooks";
 import { useInstallOutputLine } from "@/features/agents/lib/useInstallOutputLine";
 import { describeResolvedCommand } from "@/features/agents/ui/agentUi";
-import type { AcpAuthMethod, AcpRuntimeCatalogEntry } from "@/shared/api/types";
+import type { AcpRuntimeCatalogEntry } from "@/shared/api/types";
 import { getInstallErrorMessage } from "@/shared/lib/installError";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
@@ -31,6 +29,7 @@ import { ONBOARDING_PRIMARY_CTA_CLASS } from "./OnboardingChrome";
 import { useOnboardingCardLayout } from "./OnboardingCard";
 import { RuntimeErrorTooltip } from "./RuntimeErrorTooltip";
 import { OnboardingFooter } from "./OnboardingFooter";
+import { useRuntimeSignIn } from "./useRuntimeSignIn";
 import { getRuntimeDisplayLabel, RuntimeIcon } from "./RuntimeIcon";
 import {
   type OnboardingTransitionDirection,
@@ -126,50 +125,10 @@ function RuntimeStatus({
   prominent?: boolean;
   runtime: AcpRuntimeCatalogEntry;
 }) {
-  const shouldSignIn =
-    runtime.availability === "available" &&
-    runtime.authStatus.status === "logged_out";
-  const methodsQuery = useAcpAuthMethodsQuery(runtime.id, {
-    enabled: shouldSignIn && prominent,
-  });
-  const connectMutation = useConnectAcpRuntimeMutation();
-  // Child rows share the surface owner's forced query state + refresh callback
-  // (`useSetupStepState` owns the single force-on-mount). Each row must not
-  // mount its own force effect, or onboarding entry re-runs discovery once per
-  // row instead of once for the surface.
+  const signIn = useRuntimeSignIn(runtime, { enabled: prominent });
+  const shouldSignIn = signIn.shouldSignIn;
+  // Shares the surface owner's forced query (see `useSetupStepState`).
   const runtimesQuery = useAcpRuntimesQueryForced({ forceOnMount: false });
-  const [isWaitingForSignIn, setIsWaitingForSignIn] = React.useState(false);
-  const [didSignInCheckTimeOut, setDidSignInCheckTimeOut] =
-    React.useState(false);
-  const isReady = runtimeIsReadyForOnboarding(runtime);
-
-  React.useEffect(() => {
-    if (!isWaitingForSignIn || !isReady) return;
-    setIsWaitingForSignIn(false);
-    setDidSignInCheckTimeOut(false);
-  }, [isReady, isWaitingForSignIn]);
-
-  React.useEffect(() => {
-    if (!isWaitingForSignIn) return;
-
-    const interval = window.setInterval(() => {
-      void runtimesQuery.forceRefresh();
-    }, 2_000);
-    const timeout = window.setTimeout(() => {
-      setIsWaitingForSignIn(false);
-      setDidSignInCheckTimeOut(true);
-    }, 120_000);
-
-    return () => {
-      window.clearInterval(interval);
-      window.clearTimeout(timeout);
-    };
-  }, [isWaitingForSignIn, runtimesQuery.forceRefresh]);
-  const authMethods = getOnboardingAuthMethods(
-    runtime,
-    methodsQuery.data?.methods ?? [],
-  );
-  const authMethod = authMethods[0] ?? null;
 
   if (shouldSignIn) {
     if (!prominent) {
@@ -189,44 +148,24 @@ function RuntimeStatus({
           aria-label={`Sign in to ${runtime.label}`}
           className="h-7 shrink-0 rounded-full bg-foreground px-3 text-xs font-normal text-background shadow-none hover:bg-foreground/85 hover:text-background"
           data-testid={`onboarding-runtime-instructions-${runtime.id}`}
-          onClick={() => {
-            if (didSignInCheckTimeOut) {
-              setDidSignInCheckTimeOut(false);
-              setIsWaitingForSignIn(true);
-              void runtimesQuery.forceRefresh();
-              return;
-            }
-            if (!authMethod) {
-              void methodsQuery.refetch();
-              return;
-            }
-            connectMutation.mutate(
-              {
-                methodId: authMethod.id,
-                runtimeId: runtime.id,
-              },
-              {
-                onSuccess: () => setIsWaitingForSignIn(true),
-              },
-            );
-          }}
+          onClick={signIn.start}
           type="button"
           variant="ghost"
         >
-          {isWaitingForSignIn
+          {signIn.isWaitingForSignIn
             ? "Checking…"
-            : didSignInCheckTimeOut
+            : signIn.didSignInCheckTimeOut
               ? "Check again"
               : "Sign in"}
         </Button>
-        {methodsQuery.error instanceof Error ? (
+        {signIn.methodsFailed ? (
           <RuntimeErrorTooltip
             className="absolute inset-x-3 bottom-2 truncate text-xs leading-4 text-destructive"
             detail="Couldn’t load sign-in options."
             label="Sign-in unavailable"
           />
         ) : null}
-        {connectMutation.error instanceof Error ? (
+        {signIn.connectFailed ? (
           <RuntimeErrorTooltip
             className="absolute inset-x-3 bottom-2 truncate text-xs leading-4 text-destructive"
             detail="Couldn’t start sign-in. Try again."
@@ -343,53 +282,6 @@ function runtimeDetailText(runtime: AcpRuntimeCatalogEntry): string {
     return "CLI not detected.";
   }
   return "";
-}
-
-function isSupportedOnboardingAuthMethod(
-  runtime: AcpRuntimeCatalogEntry,
-  method: AcpAuthMethod,
-) {
-  if (runtime.id !== "codex") return true;
-  return !/api[-_ ]?key/i.test(`${method.id} ${method.name}`);
-}
-
-function isPreferredClaudeAuthMethod(method: AcpAuthMethod) {
-  const haystack = [
-    method.id,
-    method.name,
-    method.description ?? "",
-    method.command.join(" "),
-    method.args.join(" "),
-  ]
-    .join(" ")
-    .toLowerCase();
-  return (
-    haystack.includes("claudeai") ||
-    haystack.includes("claude ai") ||
-    haystack.includes("claude.ai") ||
-    haystack.includes("subscription")
-  );
-}
-
-function getOnboardingAuthMethods(
-  runtime: AcpRuntimeCatalogEntry,
-  methods: AcpAuthMethod[],
-) {
-  const supported = methods.filter((method) =>
-    isSupportedOnboardingAuthMethod(runtime, method),
-  );
-
-  if (runtime.id === "claude") {
-    const preferred =
-      supported.find(isPreferredClaudeAuthMethod) ?? supported[0];
-    return preferred ? [preferred] : [];
-  }
-
-  if (runtime.id === "codex") {
-    return supported.slice(0, 1);
-  }
-
-  return supported;
 }
 
 function RuntimeAuthError({ runtime }: { runtime: AcpRuntimeCatalogEntry }) {

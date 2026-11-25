@@ -186,6 +186,7 @@ export type RawAcpRuntimeCatalogEntry = {
   max_rounds_env_var?: string | null;
   install_hint: string;
   install_instructions_url: string;
+  cli_install_command?: string | null;
   can_auto_install: boolean;
   requires_external_cli?: boolean;
   underlying_cli_path: string | null;
@@ -667,6 +668,7 @@ export function fromRawAcpRuntimeCatalogEntry(
     maxRoundsEnvVar: entry.max_rounds_env_var ?? null,
     installHint: entry.install_hint,
     installInstructionsUrl: entry.install_instructions_url,
+    cliInstallCommand: entry.cli_install_command ?? null,
     canAutoInstall: entry.can_auto_install,
     requiresExternalCli: entry.requires_external_cli ?? false,
     underlyingCliPath: entry.underlying_cli_path,
@@ -875,12 +877,18 @@ export async function deleteCustomHarness(id: string): Promise<void> {
   await invokeTauri<void>("delete_custom_harness", { id });
 }
 
+/**
+ * Install a runtime's vendor CLI (when missing) and its ACP adapter. With
+ * `adapterOnly`, the native side refuses rather than run a vendor CLI
+ * installer, so automatic installs never run one without consent.
+ */
 export async function installAcpRuntime(
   runtimeId: string,
+  options?: { adapterOnly?: boolean },
 ): Promise<InstallRuntimeResult> {
   const raw = await invokeTauri<RawInstallRuntimeResult>(
     "install_acp_runtime",
-    { runtimeId },
+    options?.adapterOnly ? { runtimeId, adapterOnly: true } : { runtimeId },
   );
   return fromRawInstallRuntimeResult(raw);
 }

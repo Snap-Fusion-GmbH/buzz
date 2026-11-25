@@ -81,9 +81,7 @@ pub async fn save_custom_harness(
     original_id: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<AcpRuntimeCatalogEntry, String> {
-    use crate::managed_agents::{
-        custom_harnesses, AcpAvailabilityStatus, AuthStatus, HarnessSource,
-    };
+    use crate::managed_agents::custom_harnesses;
     use tauri::Manager;
 
     // ── Phase 1: full validation before touching the filesystem ─────────────
@@ -123,48 +121,7 @@ pub async fn save_custom_harness(
     // so concurrent saves never produce a stale registry snapshot (B-6).
     custom_harnesses::save_and_warm(&custom_dir, &definition, rename_old_id.as_deref())?;
 
-    // Resolve availability for the returned catalog entry.
-    let (availability, command_opt, binary_path) =
-        match crate::managed_agents::find_command(&definition.command) {
-            Some(path) => (
-                AcpAvailabilityStatus::Available,
-                Some(definition.command.clone()),
-                Some(path.display().to_string()),
-            ),
-            None => (AcpAvailabilityStatus::NotInstalled, None, None),
-        };
-
-    let default_args =
-        crate::managed_agents::normalize_agent_args(&definition.command, definition.args.clone());
-
-    Ok(AcpRuntimeCatalogEntry {
-        id: definition.id,
-        label: definition.label,
-        avatar_url: String::new(),
-        availability,
-        command: command_opt,
-        binary_path,
-        default_args,
-        mcp_command: None,
-        model_env_var: None,
-        provider_env_var: None,
-        thinking_env_var: None,
-        effort_canonical_values: None,
-        max_tokens_env_var: None,
-        context_limit_env_var: None,
-        max_rounds_env_var: None,
-        install_hint: definition.install_hint,
-        install_instructions_url: definition.install_instructions_url,
-        can_auto_install: false,
-        requires_external_cli: false,
-        underlying_cli_path: None,
-        node_required: false,
-        auth_status: AuthStatus::NotApplicable,
-        login_hint: None,
-        source: HarnessSource::Custom,
-        definition_env: definition.env,
-        max_parallelism: crate::managed_agents::harness_max_parallelism(&definition.command),
-    })
+    Ok(custom_harness_entry::saved_custom_harness_entry(definition))
 }
 
 /// Remove a user-defined harness definition from `<app-data>/custom_harnesses/`.
@@ -203,6 +160,7 @@ pub async fn delete_custom_harness(id: String, app: tauri::AppHandle) -> Result<
 #[tauri::command]
 pub async fn install_acp_runtime(
     runtime_id: String,
+    adapter_only: Option<bool>,
     app: tauri::AppHandle,
 ) -> Result<InstallRuntimeResult, String> {
     // ── Phase 1: blocking install ────────────────────────────────────────────
@@ -214,7 +172,7 @@ pub async fn install_acp_runtime(
     let runtime_id_clone = runtime_id.clone();
     let app_clone = app.clone();
     let install_result = tokio::task::spawn_blocking(move || {
-        install_acp_runtime_blocking(&runtime_id_clone, &app_clone)
+        install_acp_runtime_blocking(&runtime_id_clone, adapter_only == Some(true), &app_clone)
     })
     .await
     .map_err(|e| format!("install task panicked: {e}"))??;
@@ -250,6 +208,7 @@ pub async fn install_acp_runtime(
 /// running one's log, and the log filename is derived from that id.
 fn install_acp_runtime_blocking(
     runtime_id: &str,
+    adapter_only: bool,
     app: &tauri::AppHandle,
 ) -> Result<InstallRuntimeResult, String> {
     // Re-fetch the login-shell PATH so a Node.js installation that happened
@@ -288,12 +247,9 @@ fn install_acp_runtime_blocking(
 
     let mut steps = Vec::new();
 
-    // Phase 1: Install CLI if missing and commands are available.
-    // Today every entry in `cli_install_commands` is a curl-pipe; npm-backed
-    // adapter installs live in Phase 2 below where they are rewritten to a
-    // Buzz-private prefix before execution.
+    // Phase 1: a missing vendor CLI installs only on a full install (`cli_install_decision`).
     if let Some(cli) = runtime.underlying_cli {
-        if crate::managed_agents::resolve_command(cli).is_none() {
+        if cli_install_decision::vendor_cli_install_needed(runtime, cli, adapter_only)? {
             for cmd in runtime.cli_install_commands_for_os() {
                 let result = run_install_command_with_retry("cli", cmd, &reporter);
                 let success = result.success;
@@ -1023,6 +979,8 @@ pub async fn discover_managed_agent_prereqs(
     .map_err(|e| format!("spawn_blocking failed: {e}"))
 }
 
+mod cli_install_decision;
+mod custom_harness_entry;
 mod relay_directory;
 #[cfg(test)]
 use relay_directory::advance_relay_cursor;

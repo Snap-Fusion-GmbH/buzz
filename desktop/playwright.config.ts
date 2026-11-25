@@ -171,6 +171,7 @@ export default defineConfig({
         "**/onboarding-backup.spec.ts",
         "**/onboarding-agent-defaults.spec.ts",
         "**/managed-workspace.spec.ts",
+        "**/agent-tool-setup.spec.ts",
         "**/nostr-bind.spec.ts",
         "**/mobile-pairing-qr.spec.ts",
         "**/profile-nsec-reveal.spec.ts",
