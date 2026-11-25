@@ -320,3 +320,32 @@ test("locked system identity uses recovery without offering a replacement identi
   ).toHaveCount(0);
   await expect(page.getByTestId("app-sidebar")).toHaveCount(0);
 });
+
+test("managed build does not advertise the replacement desktop app", async ({
+  page,
+}) => {
+  await installMockBridge(
+    page,
+    { managedWorkspace: { status: signedIn() } },
+    {
+      skipCommunitySeed: true,
+      skipOnboardingSeed: true,
+      relayWsUrl: "wss://managed.example.invalid",
+      // Never dismissed, so only the managed-build rule can hide it.
+      seedDeprecationBannerDismissed: false,
+    },
+  );
+  await page.goto("/");
+  await expect(page.getByTestId("app-sidebar")).toBeVisible();
+  // The banner decides only after asking for the build kind.
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (
+          window as Window & { __BUZZ_E2E_COMMANDS__?: string[] }
+        ).__BUZZ_E2E_COMMANDS__?.includes("managed_workspace_configured"),
+      ),
+    )
+    .toBe(true);
+  await expect(page.getByTestId("deprecation-banner")).toHaveCount(0);
+});

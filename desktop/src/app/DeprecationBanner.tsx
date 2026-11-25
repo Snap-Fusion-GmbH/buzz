@@ -3,6 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { Sparkles, X } from "lucide-react";
 
 import {
+  bannerAllowedForBuild,
   DEPRECATION_BANNER_STORAGE_KEY,
   shouldShowDeprecationBanner,
 } from "@/app/deprecationBannerVisibility";
@@ -13,6 +14,7 @@ import {
   resolveInstallerUrl,
 } from "@/app/newAppInstaller";
 import { getNewAppInstallerTarget } from "@/shared/api/tauri";
+import { isManagedWorkspaceBuild } from "@/shared/api/tauriManagedWorkspace";
 import { Button } from "@/shared/ui/button";
 
 const BUZZ_APP_UPGRADE_GUIDE_URL =
@@ -54,11 +56,27 @@ export function DeprecationBanner() {
     shouldShowDeprecationBanner(readDismissedAt(), Date.now()),
   );
   const [installerUrl, setInstallerUrl] = React.useState<string | null>(null);
+  const [managedBuild, setManagedBuild] = React.useState<boolean | null>(null);
+  const isShown = isVisible && bannerAllowedForBuild(managedBuild);
+
+  React.useEffect(() => {
+    let isCurrent = true;
+    isManagedWorkspaceBuild()
+      .catch(() => false)
+      .then((managed) => {
+        if (isCurrent) {
+          setManagedBuild(managed);
+        }
+      });
+    return () => {
+      isCurrent = false;
+    };
+  }, []);
 
   // One attempt per mount. The click never waits on it: until it resolves,
   // and whenever it fails, the button opens the website instead.
   React.useEffect(() => {
-    if (!isVisible) {
+    if (!isShown) {
       return;
     }
     let isCurrent = true;
@@ -84,9 +102,9 @@ export function DeprecationBanner() {
       window.clearTimeout(timeout);
       controller.abort();
     };
-  }, [isVisible]);
+  }, [isShown]);
 
-  if (!isVisible) {
+  if (!isShown) {
     return null;
   }
 

@@ -561,6 +561,7 @@ pub fn run() {
             acknowledge_pending_entity_deep_link,
             start_builderlab_login,
             managed_workspace::managed_workspace_status,
+            managed_workspace::managed_workspace_configured,
             managed_workspace::managed_workspace_login,
             managed_workspace::cancel_managed_workspace_login,
             cancel_builderlab_login,

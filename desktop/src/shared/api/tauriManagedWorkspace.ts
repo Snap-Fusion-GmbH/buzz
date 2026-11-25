@@ -20,6 +20,11 @@ export function getManagedWorkspaceStatus() {
   return invoke<ManagedWorkspaceStatus>("managed_workspace_status");
 }
 
+/** True when this build carries a managed workspace profile (no I/O). */
+export function isManagedWorkspaceBuild() {
+  return invoke<boolean>("managed_workspace_configured");
+}
+
 export function signInManagedWorkspace() {
   return invoke<ManagedWorkspaceStatus>("managed_workspace_login");
 }

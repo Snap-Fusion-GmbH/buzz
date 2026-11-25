@@ -13733,6 +13733,8 @@ export function maybeInstallE2eTauriMocks() {
       }
       case "get_default_relay_url":
         return getRelayWsUrl(activeConfig);
+      case "managed_workspace_configured":
+        return activeConfig?.mock?.managedWorkspace?.status.enabled === true;
       case "managed_workspace_status":
         if (activeConfig?.mock?.managedWorkspace?.statusError) {
           throw activeConfig.mock.managedWorkspace.statusError;

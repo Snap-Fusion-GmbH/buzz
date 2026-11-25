@@ -468,6 +468,13 @@ pub(crate) async fn managed_workspace_login(
     })
 }
 
+/// Whether this build carries a managed workspace profile. A compile-time
+/// constant: no keyring, network or workspace verification is involved.
+#[tauri::command]
+pub(crate) fn managed_workspace_configured() -> bool {
+    configured()
+}
+
 #[tauri::command]
 pub(crate) fn cancel_managed_workspace_login(
     state: tauri::State<'_, ManagedWorkspaceState>,
