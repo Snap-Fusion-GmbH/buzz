@@ -796,6 +796,11 @@ void main() {
             ),
           ),
           inviteJoinRecoveryProvider.overrideWithValue((_) => recovery),
+          // Keep the relay boundary fake: the real channel list would open a
+          // live relay session during the test.
+          channelsProvider.overrideWith(
+            () => _FakeChannelsNotifier(Future.value(const [])),
+          ),
         ],
       );
       addTearDown(container.dispose);
