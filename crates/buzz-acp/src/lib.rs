@@ -13,6 +13,8 @@ mod isolated_execution;
 mod observer;
 mod pool;
 mod pool_lifecycle;
+mod probe_turn;
+use probe_turn::ProbeTurnArgs;
 mod prompt_framing;
 mod prompt_project;
 mod queue;
@@ -69,6 +71,15 @@ use uuid::Uuid;
 /// name (e.g., `buzz-acp --verbose models`) are not supported.
 fn is_subcommand(name: &str) -> bool {
     std::env::args().nth(1).map(|a| a == name).unwrap_or(false)
+}
+
+/// argv without the subcommand token, so clap doesn't reject it as a positional.
+fn subcommand_argv() -> Vec<String> {
+    std::env::args()
+        .enumerate()
+        .filter(|(i, _)| *i != 1)
+        .map(|(_, a)| a)
+        .collect()
 }
 
 /// Timeout for lightweight helper subcommands (spawn + initialize + model/method probes).
@@ -2795,35 +2806,16 @@ async fn tokio_main() -> Result<()> {
         .install_default()
         .expect("failed to install rustls crypto provider");
     if is_subcommand("models") {
-        // Strip the subcommand token so clap doesn't reject it as a positional.
-        // Keeps argv[0] (binary name) and passes everything after the subcommand.
-        let filtered: Vec<String> = std::env::args()
-            .enumerate()
-            .filter(|(i, _)| *i != 1)
-            .map(|(_, a)| a)
-            .collect();
-        let args = ModelsArgs::parse_from(&filtered);
-        return run_models(args).await;
+        return run_models(ModelsArgs::parse_from(subcommand_argv())).await;
     }
-
     if is_subcommand("auth-methods") {
-        let filtered: Vec<String> = std::env::args()
-            .enumerate()
-            .filter(|(i, _)| *i != 1)
-            .map(|(_, a)| a)
-            .collect();
-        let args = AuthMethodsArgs::parse_from(&filtered);
-        return run_auth_methods(args).await;
+        return run_auth_methods(AuthMethodsArgs::parse_from(subcommand_argv())).await;
     }
-
     if is_subcommand("authenticate") {
-        let filtered: Vec<String> = std::env::args()
-            .enumerate()
-            .filter(|(i, _)| *i != 1)
-            .map(|(_, a)| a)
-            .collect();
-        let args = AuthenticateArgs::parse_from(&filtered);
-        return run_authenticate(args).await;
+        return run_authenticate(AuthenticateArgs::parse_from(subcommand_argv())).await;
+    }
+    if is_subcommand("probe-turn") {
+        return probe_turn::run_probe_turn(ProbeTurnArgs::parse_from(subcommand_argv())).await;
     }
 
     // Stdout is the ACP transport when buzz-acp is launched as an agent command.
