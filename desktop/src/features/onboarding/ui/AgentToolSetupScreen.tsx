@@ -368,14 +368,9 @@ export function AgentToolSetupScreen({
           </ul>
         )}
 
-        <div className="flex items-center justify-between gap-3">
-          {allReady ? (
-            <span />
-          ) : (
-            <Button onClick={onDone} variant="ghost">
-              Skip for now
-            </Button>
-          )}
+        {/* One way forward, never while an install is running: Continue keeps
+            whatever is ready; required agents follow for each ready harness. */}
+        <div className="flex items-center justify-end gap-3">
           <Button disabled={busy} onClick={onDone}>
             {allReady ? "Open Buzz" : busy ? "Setting up…" : "Continue"}
           </Button>

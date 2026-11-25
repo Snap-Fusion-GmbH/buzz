@@ -4,9 +4,11 @@ import { LoaderCircle } from "lucide-react";
 
 import {
   useAcpRuntimesQuery,
+  useCreateManagedAgentMutation,
   useCreatePersonaMutation,
   usePersonasQuery,
 } from "@/features/agents/hooks";
+import { buildInstanceInputForDefinition } from "@/features/agents/lib/instanceInputForDefinition";
 import { resolveManagedAgentAvatarUrl } from "@/features/agents/ui/managedAgentAvatar";
 import { getDiscoveredPersonaModelOptions } from "@/features/agents/ui/usePersonaModelDiscovery";
 import {
@@ -14,7 +16,7 @@ import {
   harnessesNeedingAgent,
 } from "@/features/onboarding/agentToolSetup";
 import { discoverAgentModels } from "@/shared/api/agentModels";
-import type { AcpRuntimeCatalogEntry } from "@/shared/api/types";
+import type { AcpRuntime, AcpRuntimeCatalogEntry } from "@/shared/api/types";
 import { PairedCoreMark } from "@/shared/ui/buzz-logo/PairedCoreMark";
 import { Button } from "@/shared/ui/button";
 import { RuntimeIcon } from "./RuntimeIcon";
@@ -23,17 +25,23 @@ const FIELD_CLASS =
   "h-10 w-full rounded-lg border border-border bg-background px-3 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 function RequiredAgentForm({
+  onHoldChange,
   position,
   runtime,
   total,
   workspaceName,
 }: {
+  /** Keep this step on screen while the agent is created and started. */
+  onHoldChange: (hold: boolean) => void;
   position: number;
   runtime: AcpRuntimeCatalogEntry;
   total: number;
   workspaceName: string;
 }) {
   const { mutateAsync: createPersona } = useCreatePersonaMutation();
+  const { mutateAsync: createAgent } = useCreateManagedAgentMutation();
+  const [phase, setPhase] = React.useState<"creating" | "starting">("creating");
+  const [startError, setStartError] = React.useState<string | null>(null);
   const [name, setName] = React.useState(() => defaultAgentName(runtime));
   const [model, setModel] = React.useState("");
   const [pending, setPending] = React.useState(false);
@@ -60,13 +68,16 @@ function RequiredAgentForm({
     if (!trimmedName || pending) return;
     setPending(true);
     setError(null);
+    setPhase("creating");
+    onHoldChange(true);
+    let persona: Awaited<ReturnType<typeof createPersona>>;
     try {
       const avatarUrl = await resolveManagedAgentAvatarUrl(
         undefined,
         undefined,
         runtime.avatarUrl,
       );
-      await createPersona({
+      persona = await createPersona({
         displayName: trimmedName,
         systemPrompt: "",
         runtime: runtime.id,
@@ -82,7 +93,33 @@ function RequiredAgentForm({
             : "Couldn’t create the agent. Try again.",
       );
       setPending(false);
+      onHoldChange(false);
+      return;
     }
+    // Start it right away, as the Agents dialog's create-and-start does.
+    setPhase("starting");
+    try {
+      if (!runtime.command || !runtime.binaryPath) {
+        throw new Error(`${label} is not available to start the agent.`);
+      }
+      const created = await createAgent(
+        await buildInstanceInputForDefinition(persona, runtime as AcpRuntime),
+      );
+      if (created.spawnError) {
+        setStartError(
+          `${persona.displayName} was created, but it did not start: ${created.spawnError}`,
+        );
+        return;
+      }
+    } catch (reason) {
+      setStartError(
+        `${persona.displayName} was created, but it could not be started: ${
+          reason instanceof Error ? reason.message : String(reason)
+        }`,
+      );
+      return;
+    }
+    onHoldChange(false);
   }
 
   return (
@@ -165,12 +202,28 @@ function RequiredAgentForm({
           {error}
         </p>
       ) : null}
-
-      <div className="flex justify-end">
-        <Button disabled={!trimmedName || pending} type="submit">
-          {pending ? "Creating…" : `Create ${label} agent`}
-        </Button>
-      </div>
+      {startError ? (
+        <div className="space-y-3">
+          <p className="text-sm text-destructive" role="alert">
+            {startError} You can start it later under Agents.
+          </p>
+          <div className="flex justify-end">
+            <Button onClick={() => onHoldChange(false)} type="button">
+              Continue
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex justify-end">
+          <Button disabled={!trimmedName || pending} type="submit">
+            {!pending
+              ? `Create ${label} agent`
+              : phase === "creating"
+                ? "Creating…"
+                : "Starting…"}
+          </Button>
+        </div>
+      )}
     </form>
   );
 }
@@ -193,6 +246,8 @@ export function RequiredAgentGate({
   // Count the harnesses that needed an agent when this gate first saw them,
   // so "Agent 2 of 2" stays stable while agents are created.
   const [initialCount, setInitialCount] = React.useState<number | null>(null);
+  // The step being finished: its agent exists but has not started yet.
+  const [held, setHeld] = React.useState<AcpRuntimeCatalogEntry | null>(null);
 
   const loading =
     (runtimesQuery.isLoading && !runtimesQuery.data) ||
@@ -223,15 +278,19 @@ export function RequiredAgentGate({
     );
   }
 
-  const next = needed[0];
+  const next = held ?? needed[0];
   if (!next) return <>{children}</>;
 
   const total = Math.max(initialCount ?? needed.length, needed.length);
+  const remaining = needed.some((entry) => entry.id === next.id)
+    ? needed.length
+    : needed.length + 1;
   return (
     <main className="flex min-h-dvh items-center justify-center bg-background px-6 py-10 text-foreground">
       <RequiredAgentForm
         key={next.id}
-        position={total - needed.length + 1}
+        onHoldChange={(hold) => setHeld(hold ? next : null)}
+        position={total - remaining + 1}
         runtime={next}
         total={total}
         workspaceName={workspaceName}

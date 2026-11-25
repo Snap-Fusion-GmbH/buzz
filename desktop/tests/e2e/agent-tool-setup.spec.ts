@@ -130,6 +130,13 @@ test("first sign-in installs a missing adapter and asks before installing a CLI"
   await expect(page.getByTestId("agent-tool-claude-install-output")).toHaveText(
     "added 12 packages in 3s",
   );
+  // No way past the screen while an install is running.
+  await expect(
+    page.getByRole("button", { name: "Setting up…" }),
+  ).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Skip for now" })).toHaveCount(
+    0,
+  );
   // The adapter installs on its own because the Claude Code CLI is present.
   await expect(page.getByTestId("agent-tool-claude-status")).toHaveText(
     "Ready",
@@ -175,7 +182,9 @@ test("first sign-in installs a missing adapter and asks before installing a CLI"
   await expect(agentStep).toHaveCount(0);
 });
 
-test("skipping leaves every install to the user", async ({ page }) => {
+test("continuing without installing leaves every install to the user", async ({
+  page,
+}) => {
   await installMockBridge(
     page,
     {
@@ -194,7 +203,10 @@ test("skipping leaves every install to the user", async ({ page }) => {
   await expect(page.getByTestId("agent-tool-codex")).toContainText(
     "Not installed on this computer",
   );
-  await page.getByRole("button", { name: "Skip for now" }).click();
+  await expect(page.getByRole("button", { name: "Skip for now" })).toHaveCount(
+    0,
+  );
+  await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByTestId("app-sidebar")).toBeVisible();
   expect(await installCalls(page)).toEqual([]);
 });
@@ -328,6 +340,27 @@ test("every ready harness needs an agent before Buzz opens, on any launch", asyn
   expect(await createdPersonas(page)).toEqual([
     { displayName: "Claude", runtime: "claude", model: "sonnet" },
     { displayName: "Builder", runtime: "codex", model: null },
+  ]);
+  // Each agent starts right away, as the Agents dialog's create-and-start does.
+  const started = (await commandPayloads(
+    page,
+    "create_managed_agent",
+  )) as Array<{
+    input: { name: string; spawnAfterCreate: boolean; agentCommand: string };
+  }>;
+  expect(
+    started.map(({ input }) => ({
+      name: input.name,
+      spawnAfterCreate: input.spawnAfterCreate,
+      agentCommand: input.agentCommand,
+    })),
+  ).toEqual([
+    {
+      name: "Claude",
+      spawnAfterCreate: true,
+      agentCommand: "claude-agent-acp",
+    },
+    { name: "Builder", spawnAfterCreate: true, agentCommand: "codex-acp" },
   ]);
 });
 
@@ -522,9 +555,7 @@ test("a failed automatic install explains why and can be retried", async ({
   );
   await expect(claude).toContainText("npm ERR! network request failed");
   // The failure never blocks the app, and is not retried automatically.
-  await expect(
-    page.getByRole("button", { name: "Skip for now" }),
-  ).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Continue" })).toBeEnabled();
   expect(await commandPayloads(page, "install_acp_runtime")).toHaveLength(1);
 
   await claude.getByRole("button", { name: "Retry" }).click();
