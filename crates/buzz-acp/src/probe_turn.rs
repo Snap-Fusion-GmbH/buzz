@@ -175,7 +175,8 @@ mod tests {
     use super::*;
 
     /// A claude-agent-acp stand-in speaking ACP v2 as 0.112 does: identity in
-    /// `info`, a top-level `systemPrompt` rejected with -32602, and the prompt
+    /// `info`, a top-level `systemPrompt` and an untagged config value both
+    /// rejected with -32602, and the prompt
     /// acknowledged with a `messageId` before an idle `state_update` ends it.
     const FAKE_CLAUDE_V2: &str = r#"
 while read -r REQ; do
@@ -185,7 +186,13 @@ while read -r REQ; do
       echo '{"jsonrpc":"2.0","id":'"$ID"',"result":{"protocolVersion":2,"info":{"name":"@agentclientprotocol/claude-agent-acp","version":"0.112.0"}}}' ;;
     *'"method":"session/new"'*)
       if printf '%s' "$REQ" | grep -q '"systemPrompt":{"append"'; then
-        echo '{"jsonrpc":"2.0","id":'"$ID"',"result":{"sessionId":"probe-session"}}'
+        echo '{"jsonrpc":"2.0","id":'"$ID"',"result":{"sessionId":"probe-session","configOptions":[{"configId":"model","category":"model","type":"select","currentValue":"default","options":[{"value":"default","name":"Default"},{"value":"sonnet","name":"Sonnet"}]}]}}'
+      else
+        echo '{"jsonrpc":"2.0","id":'"$ID"',"error":{"code":-32602,"message":"Invalid params"}}'
+      fi ;;
+    *'"method":"session/set_config_option"'*)
+      if printf '%s' "$REQ" | grep -q '"type":"id"'; then
+        echo '{"jsonrpc":"2.0","id":'"$ID"',"result":{"configOptions":[]}}'
       else
         echo '{"jsonrpc":"2.0","id":'"$ID"',"error":{"code":-32602,"message":"Invalid params"}}'
       fi ;;
@@ -209,7 +216,13 @@ done
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
             .expect("chmod fake adapter");
         let command = path.to_str().expect("utf8 path").to_string();
-        let args = ProbeTurnArgs::parse_from(["buzz-acp", "--agent-command", &command]);
+        let args = ProbeTurnArgs::parse_from([
+            "buzz-acp",
+            "--agent-command",
+            &command,
+            "--model",
+            "sonnet",
+        ]);
         let mut client = AcpClient::spawn(&command, &[], &[], false)
             .await
             .expect("spawn fake adapter");

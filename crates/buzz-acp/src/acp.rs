@@ -207,6 +207,9 @@ pub struct AcpClient {
     /// a JSON-RPC *success*, not `-32601` — which the main loop would read as
     /// a delivered steer and drop the user's message from the queue.
     steering_supported: bool,
+    /// `protocolVersion` the agent answered `initialize` with (1 until then).
+    /// ACP v2 changed some request shapes, e.g. the tagged config value.
+    protocol_version: u64,
     /// Per-turn channel for receiving goose-native non-cancelling steer
     /// requests from the main loop. Installed by
     /// [`install_steer_rx`](Self::install_steer_rx) at dispatch and
@@ -629,6 +632,7 @@ impl AcpClient {
             observer_context: ObserverContext::default(),
             active_run_id: None,
             steering_supported: false,
+            protocol_version: 1,
             steer_rx: None,
             goose_usage: UsageTracker::default(),
             standard_usage: StandardUsageTracker::default(),
@@ -692,6 +696,7 @@ impl AcpClient {
             .pointer("/_meta/steering/supported")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        self.protocol_version = result["protocolVersion"].as_u64().unwrap_or(1);
         tracing::debug!(target: "acp::init", "initialize response: {result}");
         Ok(result)
     }
@@ -807,17 +812,23 @@ impl AcpClient {
     }
 
     /// Send `session/set_config_option` (stable ACP path).
+    ///
+    /// ACP v2 tags a select value with `"type": "id"` and rejects an untagged
+    /// one as invalid params; v1 takes the untagged value.
     pub async fn session_set_config_option(
         &mut self,
         session_id: &str,
         config_id: &str,
         value: &str,
     ) -> Result<serde_json::Value, AcpError> {
-        let params = serde_json::json!({
+        let mut params = serde_json::json!({
             "sessionId": session_id,
             "configId": config_id,
             "value": value,
         });
+        if self.protocol_version >= 2 {
+            params["type"] = serde_json::Value::from("id");
+        }
         self.send_request("session/set_config_option", params).await
     }
 
