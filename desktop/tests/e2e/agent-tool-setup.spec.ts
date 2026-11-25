@@ -158,12 +158,20 @@ test("first sign-in installs a missing adapter and asks before installing a CLI"
     ]);
 
   await page.getByRole("button", { name: "Continue" }).click();
+  // Claude Code is ready but has no agent yet: Buzz stays closed until one exists.
+  const agentStep = page.getByTestId("required-agent-claude");
+  await expect(agentStep).toBeVisible();
+  await expect(page.getByTestId("app-sidebar")).toHaveCount(0);
+  await agentStep
+    .getByRole("button", { name: "Create Claude Code agent" })
+    .click();
   await expect(page.getByTestId("app-sidebar")).toBeVisible();
 
   // Offered once per computer: a relaunch goes straight to the app.
   await page.reload();
   await expect(page.getByTestId("app-sidebar")).toBeVisible();
   await expect(setup).toHaveCount(0);
+  await expect(agentStep).toHaveCount(0);
 });
 
 test("skipping leaves every install to the user", async ({ page }) => {
@@ -241,4 +249,105 @@ test("a signed-out CLI without adapter sign-in methods opens the CLI's own login
     { timeout: 15_000 },
   );
   await expect(page.getByRole("button", { name: "Open Buzz" })).toBeEnabled();
+});
+
+const CODEX_READY = {
+  ...CODEX_NOT_INSTALLED,
+  availability: "available",
+  command: "codex-acp",
+  binary_path: "/home/user/.local/share/Buzz/node-tools/bin/codex-acp",
+  underlying_cli_path: "/usr/local/bin/codex",
+  auth_status: { status: "logged_in" },
+};
+
+function createdPersonas(page: Page) {
+  return page.evaluate(() =>
+    (
+      (
+        window as Window & {
+          __BUZZ_E2E_COMMAND_LOG__?: Array<{
+            command: string;
+            payload: { input?: Record<string, unknown> } | null;
+          }>;
+        }
+      ).__BUZZ_E2E_COMMAND_LOG__ ?? []
+    )
+      .filter((entry) => entry.command === "create_persona")
+      .map((entry) => ({
+        displayName: entry.payload?.input?.displayName,
+        runtime: entry.payload?.input?.runtime,
+        model: entry.payload?.input?.model ?? null,
+      })),
+  );
+}
+
+test("every ready harness needs an agent before Buzz opens, on any launch", async ({
+  page,
+}) => {
+  await installMockBridge(
+    page,
+    {
+      managedWorkspace: { status: signedIn },
+      // Tool setup finished long ago (the helper seeds it); both harnesses are
+      // ready but neither has an agent.
+      acpRuntimesCatalog: [CLAUDE_READY, CODEX_READY, BUZZ_AGENT],
+      discoverAgentModels: {
+        models: [
+          { id: "default", name: "Default (recommended)" },
+          { id: "opus", name: "Opus 5.5" },
+          { id: "sonnet", name: "Sonnet 5.5" },
+        ],
+        agentDefaultModel: "default",
+        supportsSwitching: true,
+      },
+    },
+    {
+      skipCommunitySeed: true,
+      skipOnboardingSeed: true,
+      relayWsUrl: "wss://managed.example.invalid",
+    },
+  );
+  await page.goto("/");
+
+  const claudeStep = page.getByTestId("required-agent-claude");
+  await expect(claudeStep).toContainText("Agent 1 of 2");
+  await expect(claudeStep).toContainText("Set up your Claude Code agent");
+  await expect(claudeStep.getByLabel("Agent name")).toHaveValue("Claude");
+  await claudeStep.getByLabel("Model").selectOption({ label: "Sonnet 5.5" });
+  await claudeStep
+    .getByRole("button", { name: "Create Claude Code agent" })
+    .click();
+
+  const codexStep = page.getByTestId("required-agent-codex");
+  await expect(codexStep).toContainText("Agent 2 of 2");
+  await codexStep.getByLabel("Agent name").fill("Builder");
+  await codexStep.getByRole("button", { name: "Create Codex agent" }).click();
+
+  await expect(page.getByTestId("app-sidebar")).toBeVisible();
+  expect(await createdPersonas(page)).toEqual([
+    { displayName: "Claude", runtime: "claude", model: "sonnet" },
+    { displayName: "Builder", runtime: "codex", model: null },
+  ]);
+});
+
+test("a signed-out or missing harness never blocks Buzz", async ({ page }) => {
+  await installMockBridge(
+    page,
+    {
+      managedWorkspace: { status: signedIn },
+      acpRuntimesCatalog: [
+        { ...CLAUDE_READY, auth_status: { status: "logged_out" } },
+        CODEX_NOT_INSTALLED,
+        BUZZ_AGENT,
+      ],
+    },
+    {
+      skipCommunitySeed: true,
+      skipOnboardingSeed: true,
+      relayWsUrl: "wss://managed.example.invalid",
+    },
+  );
+  await page.goto("/");
+  await expect(page.getByTestId("app-sidebar")).toBeVisible();
+  await expect(page.getByTestId(/^required-agent-/)).toHaveCount(0);
 });

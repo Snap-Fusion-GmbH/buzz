@@ -1,4 +1,4 @@
-import type { AcpRuntimeCatalogEntry } from "@/shared/api/types";
+import type { AcpRuntimeCatalogEntry, AgentPersona } from "@/shared/api/types";
 
 /** Agent CLIs the first-run setup looks for, in display order. */
 export const AGENT_TOOL_SETUP_RUNTIME_IDS = ["claude", "codex"] as const;
@@ -69,6 +69,33 @@ export function automaticAdapterInstalls(
       return status.kind === "adapter_needed" && status.automatic;
     })
     .map((runtime) => runtime.id);
+}
+
+/**
+ * Ready setup harnesses (installed and signed in) that have no agent of the
+ * user's own yet, in display order. Each must get an agent before Buzz opens;
+ * a harness that is missing or signed out never blocks.
+ */
+export function harnessesNeedingAgent(
+  runtimes: readonly AcpRuntimeCatalogEntry[],
+  personas: readonly Pick<AgentPersona, "runtime" | "isBuiltIn">[],
+): AcpRuntimeCatalogEntry[] {
+  const covered = new Set(
+    personas
+      .filter((persona) => !persona.isBuiltIn && persona.runtime)
+      .map((persona) => persona.runtime),
+  );
+  return agentToolSetupRuntimes(runtimes).filter(
+    (runtime) =>
+      agentToolStatus(runtime).kind === "ready" && !covered.has(runtime.id),
+  );
+}
+
+/** The prefilled name for a harness's first agent. */
+export function defaultAgentName(
+  runtime: Pick<AcpRuntimeCatalogEntry, "id" | "label">,
+) {
+  return runtime.id === "claude" ? "Claude" : runtime.label;
 }
 
 // Agent CLIs and adapters belong to this computer, not to an identity, so the

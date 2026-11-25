@@ -16,6 +16,7 @@ import {
 } from "@/features/onboarding/agentToolSetup";
 import { AgentToolSetupScreen } from "@/features/onboarding/ui/AgentToolSetupScreen";
 import { KeyringLockedScreen } from "@/features/onboarding/ui/KeyringLockedScreen";
+import { RequiredAgentGate } from "@/features/onboarding/ui/RequiredAgentGate";
 import { RelaunchRequiredScreen } from "@/features/onboarding/ui/RelaunchRequiredScreen";
 import { ResetFailedScreen } from "@/features/onboarding/ui/ResetFailedScreen";
 import {
@@ -179,7 +180,14 @@ export function ManagedWorkspaceGate({ children }: { children: ReactNode }) {
         />
       );
     }
-    return <>{children}</>;
+    // Every launch: each ready harness needs an agent before Buzz opens.
+    return (
+      <RequiredAgentGate
+        workspaceName={status?.profile?.workspace_name ?? "Buzz"}
+      >
+        {children}
+      </RequiredAgentGate>
+    );
   }
 
   return (

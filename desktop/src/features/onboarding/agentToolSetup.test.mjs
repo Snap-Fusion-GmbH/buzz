@@ -5,6 +5,7 @@ import {
   agentToolSetupRuntimes,
   agentToolStatus,
   automaticAdapterInstalls,
+  harnessesNeedingAgent,
 } from "./agentToolSetup.ts";
 
 function runtime(overrides) {
@@ -103,4 +104,40 @@ test("lists Claude Code then Codex, skipping runtimes the catalog lacks", () => 
     agentToolSetupRuntimes([runtime({ id: "codex" })]).map((entry) => entry.id),
     ["codex"],
   );
+});
+
+test("every ready harness without an agent of its own needs one", () => {
+  const catalog = [
+    runtime({ id: "claude" }),
+    runtime({ id: "codex", label: "Codex" }),
+  ];
+  const ids = (personas) =>
+    harnessesNeedingAgent(catalog, personas).map((entry) => entry.id);
+
+  assert.deepEqual(ids([]), ["claude", "codex"]);
+  assert.deepEqual(ids([{ runtime: "claude", isBuiltIn: false }]), ["codex"]);
+  // A built-in template is not the user's agent.
+  assert.deepEqual(ids([{ runtime: "claude", isBuiltIn: true }]), [
+    "claude",
+    "codex",
+  ]);
+  // Personas without a harness inherit nothing here.
+  assert.deepEqual(ids([{ runtime: null, isBuiltIn: false }]), [
+    "claude",
+    "codex",
+  ]);
+
+  // Missing or signed-out harnesses never block.
+  for (const blocked of [
+    { availability: "not_installed" },
+    { availability: "adapter_missing" },
+    { authStatus: { status: "logged_out" } },
+    { authStatus: { status: "unknown" } },
+  ]) {
+    assert.deepEqual(
+      harnessesNeedingAgent([runtime({ id: "claude", ...blocked })], []),
+      [],
+      JSON.stringify(blocked),
+    );
+  }
 });
