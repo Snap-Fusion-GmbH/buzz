@@ -7287,6 +7287,10 @@ mod tests {
         assert!(s.contains(&format!("Project owner: {owner}")));
         assert!(s.contains("Default repository: none yet"));
         assert!(
+            !s.contains("Fetch or re-clone"),
+            "no repository to re-check"
+        );
+        assert!(
             s.contains("do not run `buzz projects create`")
                 || s.contains("Do not run `buzz projects create`")
         );
@@ -7331,6 +7335,7 @@ mod tests {
         assert!(prompt.contains(&format!(
             "Default repository: space-invaders-3d (owner {owner})"
         )));
+        assert!(prompt.contains("Fetch or re-clone the repository before answering"));
         assert!(prompt.contains("belong to this project"));
     }
 

@@ -186,6 +186,10 @@ fn parse_repo_coord(value: &str) -> Option<(String, String)> {
     Some((owner, id.to_string()))
 }
 
+/// Repository contents change between turns (people add files and push from
+/// Buzz), so an agent must not answer about them from an earlier check.
+const REPOSITORY_FRESHNESS: &str = "\nRepository contents change between turns: people add files and push from Buzz. Fetch or re-clone the repository before answering about what it contains; never rely on an earlier check.";
+
 /// Render the channel-bound project and its canonical repository, not a global listing.
 pub(crate) fn append_project_home(
     output: &mut String,
@@ -216,6 +220,7 @@ pub(crate) fn append_project_home(
             output.push_str(&format!(
                 "\nDefault repository: {repo_id} (owner {repo_owner})"
             ));
+            output.push_str(REPOSITORY_FRESHNESS);
         }
         _ => output.push_str("\nDefault repository: none yet"),
     }
