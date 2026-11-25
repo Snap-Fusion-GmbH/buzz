@@ -151,12 +151,17 @@ fn configure_git_auth(command: &mut Command, auth: &GitAuthConfig, needs_credent
     apply_git_config(command, &entries);
 }
 
-/// Format a path for git `credential.helper`.
+/// Format a helper executable path for git `credential.helper`.
 ///
-/// Git for Windows invokes helpers via MinGW bash, which treats `\` as
-/// escapes. Forward slashes work on every platform git supports.
-fn credential_helper_config_value(path: &std::path::Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
+/// Git runs a helper through the shell, so an unquoted path splits at its
+/// first space (`/Applications/Snap Fusion Buzz.app/...`). The `!` form runs
+/// the single-quoted path as written. Git for Windows invokes helpers via
+/// MinGW bash, which treats `\` as escapes, so slashes go forward there.
+pub(crate) fn credential_helper_config_value(path: &std::path::Path) -> String {
+    format!(
+        "!{}",
+        crate::github_access::shell_quote(&path.to_string_lossy().replace('\\', "/"))
+    )
 }
 
 fn apply_git_config(command: &mut Command, entries: &[(String, String)]) {
@@ -520,7 +525,56 @@ mod tests {
             std::path::PathBuf::from(r"C:\Users\x\AppData\Local\Buzz\git-credential-nostr.exe");
         assert_eq!(
             credential_helper_config_value(&path),
-            "C:/Users/x/AppData/Local/Buzz/git-credential-nostr.exe",
+            "!'C:/Users/x/AppData/Local/Buzz/git-credential-nostr.exe'",
+        );
+    }
+
+    /// Git must run a helper whose path has spaces, as branded app bundles do.
+    #[cfg(unix)]
+    #[test]
+    fn credential_helper_runs_from_a_path_with_spaces() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bundle = dir.path().join("Snap Fusion's Buzz.app/Contents/MacOS");
+        std::fs::create_dir_all(&bundle).expect("bundle dir");
+        let helper = bundle.join("git-credential-nostr");
+        std::fs::write(
+            &helper,
+            "#!/bin/sh\necho username=nostr\necho password=signed\n",
+        )
+        .expect("write helper");
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod helper");
+        let mut child = std::process::Command::new("git")
+            .args(["-c", "credential.helper="])
+            .arg("-c")
+            .arg(format!(
+                "credential.helper={}",
+                credential_helper_config_value(&helper)
+            ))
+            .args(["credential", "fill"])
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn git");
+        child
+            .stdin
+            .take()
+            .expect("stdin")
+            .write_all(b"protocol=https\nhost=relay.example\npath=git/repo\n\n")
+            .expect("write request");
+        let output = child.wait_with_output().expect("git credential fill");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("password=signed"),
+            "helper did not run: {}",
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 

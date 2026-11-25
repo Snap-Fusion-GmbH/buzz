@@ -617,7 +617,7 @@ fn custom_acp_command_keeps_relay_git_credentials() {
     );
     assert_eq!(
         env.get("GIT_CONFIG_VALUE_0"),
-        Some(&"/opt/buzz/git-credential-nostr")
+        Some(&"!'/opt/buzz/git-credential-nostr'")
     );
     assert_eq!(env.get("GIT_CONFIG_VALUE_1"), Some(&"true"));
 

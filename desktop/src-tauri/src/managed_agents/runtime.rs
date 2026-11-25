@@ -47,7 +47,7 @@ fn apply_custom_acp_git_credentials(
     );
     command.env(
         "GIT_CONFIG_VALUE_0",
-        helper.to_string_lossy().replace('\\', "/"),
+        crate::commands::project_git_exec::credential_helper_config_value(helper),
     );
     command.env(
         "GIT_CONFIG_KEY_1",
