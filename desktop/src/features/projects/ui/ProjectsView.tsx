@@ -593,7 +593,9 @@ export function ProjectsView() {
   const repositoryItems = (
     <ProjectsOverviewRepositoryItems
       currentPubkey={currentPubkey}
+      deleteDisabled={deleteProjectMutation.isPending}
       localRepoNames={localRepoNames}
+      onDelete={handleDeleteProject}
       onOpen={handleOpenRepository}
       onOpenTerminal={handleOpenRepositoryTerminal}
       profiles={profiles}

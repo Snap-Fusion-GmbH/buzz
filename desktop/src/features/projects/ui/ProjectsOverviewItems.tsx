@@ -304,7 +304,9 @@ export function ProjectsOverviewProjectItems({
 
 export function ProjectsOverviewRepositoryItems({
   currentPubkey,
+  deleteDisabled,
   localRepoNames,
+  onDelete,
   onOpen,
   onOpenTerminal,
   profiles,
@@ -313,7 +315,9 @@ export function ProjectsOverviewRepositoryItems({
   visibleRepositories,
 }: {
   currentPubkey: string | undefined;
+  deleteDisabled: boolean;
   localRepoNames: Set<string>;
+  onDelete: (project: Project) => Promise<void> | void;
   onOpen: (project: Project, repository: Repository) => void;
   onOpenTerminal: (repository: Repository) => void;
   profiles?: UserProfileLookup;
@@ -393,6 +397,13 @@ export function ProjectsOverviewRepositoryItems({
                     key={repository.repoAddress}
                   >
                     <RepositoryGridCard
+                      canDelete={canDeleteProject(
+                        project,
+                        currentPubkey,
+                        profiles,
+                      )}
+                      deleteDisabled={deleteDisabled}
+                      onDelete={onDelete}
                       hasLocal={hasLocalRepositoryCheckout(
                         repository,
                         localRepoNames,
@@ -428,6 +439,9 @@ export function ProjectsOverviewRepositoryItems({
                 key={repository.repoAddress}
               >
                 <RepositoryListRow
+                  canDelete={canDeleteProject(project, currentPubkey, profiles)}
+                  deleteDisabled={deleteDisabled}
+                  onDelete={onDelete}
                   hasLocal={hasLocalRepositoryCheckout(
                     repository,
                     localRepoNames,

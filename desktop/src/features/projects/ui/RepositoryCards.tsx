@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { FolderGit2, Globe, SquareTerminal } from "lucide-react";
+import { FolderGit2, Globe, SquareTerminal, Trash2 } from "lucide-react";
 
 import type {
   Project,
@@ -23,7 +23,18 @@ import {
 import { cn } from "@/shared/lib/cn";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { useRelayOrigin } from "@/shared/lib/useRelayOrigin";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/shared/ui/alert-dialog";
 import { BuzzMark } from "@/shared/ui/buzz-logo/BuzzMark";
+import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
 import { DropdownMenuItem } from "@/shared/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
@@ -49,6 +60,15 @@ export type RepositoryListItem = {
 };
 
 type RepositoryItemProps = RepositoryListItem & {
+  /**
+   * Whether the viewer may delete this row. Only a standalone repository
+   * (one no project claims) is deletable here: its read model is the
+   * repository's own coordinate, so the project deletion path tombstones
+   * exactly that repository announcement.
+   */
+  canDelete?: boolean;
+  deleteDisabled?: boolean;
+  onDelete?: (project: Project) => Promise<void> | void;
   hasLocal: boolean;
   onOpen: (project: Project, repository: Repository) => void;
   onOpenTerminal: (repository: Repository) => void;
@@ -169,27 +189,96 @@ function repositoryPeople(
 }
 
 function RepositoryActionsMenu({
+  canDelete = false,
+  deleteDisabled = false,
   hasLocal,
+  onDelete,
   onOpenTerminal,
+  project,
   repository,
-}: Pick<RepositoryItemProps, "hasLocal" | "onOpenTerminal" | "repository">) {
+}: Pick<
+  RepositoryItemProps,
+  | "canDelete"
+  | "deleteDisabled"
+  | "hasLocal"
+  | "onDelete"
+  | "onOpenTerminal"
+  | "project"
+  | "repository"
+>) {
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
+  const deletable = canDelete && project.legacy && onDelete !== undefined;
+
   return (
-    <ProjectListRowMenu label={`More options for ${repository.name}`}>
-      <CopyShareLinkMenuItem
-        link={repositoryShareLink(repository)}
-        testId={`repository-copy-link-${repository.dtag}`}
-      />
-      <DropdownMenuItem
-        onSelect={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          onOpenTerminal(repository);
-        }}
-      >
-        <SquareTerminal className="h-4 w-4" />
-        {projectTerminalLabel(hasLocal)}
-      </DropdownMenuItem>
-    </ProjectListRowMenu>
+    <AlertDialog onOpenChange={setConfirmOpen} open={confirmOpen}>
+      <ProjectListRowMenu label={`More options for ${repository.name}`}>
+        <CopyShareLinkMenuItem
+          link={repositoryShareLink(repository)}
+          testId={`repository-copy-link-${repository.dtag}`}
+        />
+        <DropdownMenuItem
+          onSelect={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onOpenTerminal(repository);
+          }}
+        >
+          <SquareTerminal className="h-4 w-4" />
+          {projectTerminalLabel(hasLocal)}
+        </DropdownMenuItem>
+        {deletable ? (
+          <DropdownMenuItem
+            className="text-destructive focus:text-destructive"
+            data-testid={`repository-delete-${repository.dtag}`}
+            disabled={deleteDisabled}
+            onSelect={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              if (!deleteDisabled) setConfirmOpen(true);
+            }}
+          >
+            <Trash2 className="h-4 w-4" />
+            Delete repository
+          </DropdownMenuItem>
+        ) : null}
+      </ProjectListRowMenu>
+      {deletable ? (
+        <AlertDialogContent
+          data-testid={`repository-delete-confirm-${repository.dtag}`}
+        >
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete repository?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Delete {repository.name} for everyone. It can no longer be opened,
+              cloned or pushed to. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel asChild>
+              <Button disabled={deleteDisabled} type="button" variant="outline">
+                Cancel
+              </Button>
+            </AlertDialogCancel>
+            <AlertDialogAction asChild>
+              <Button
+                data-testid={`repository-delete-confirm-button-${repository.dtag}`}
+                disabled={deleteDisabled}
+                onClick={(event) => {
+                  event.preventDefault();
+                  void Promise.resolve(onDelete(project)).finally(() =>
+                    setConfirmOpen(false),
+                  );
+                }}
+                type="button"
+                variant="destructive"
+              >
+                {deleteDisabled ? "Deleting..." : "Delete repository"}
+              </Button>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      ) : null}
+    </AlertDialog>
   );
 }
 
@@ -227,8 +316,12 @@ export const RepositoryGridCard = React.memo(function RepositoryGridCard(
           />
           <div className="pointer-events-auto ml-auto">
             <RepositoryActionsMenu
+              canDelete={props.canDelete}
+              deleteDisabled={props.deleteDisabled}
               hasLocal={hasLocal}
+              onDelete={props.onDelete}
               onOpenTerminal={onOpenTerminal}
+              project={project}
               repository={repository}
             />
           </div>
@@ -307,8 +400,12 @@ export const RepositoryListRow = React.memo(function RepositoryListRow(
       titleSecondaryTestId="repositories-row-description"
       trailing={
         <RepositoryActionsMenu
+          canDelete={props.canDelete}
+          deleteDisabled={props.deleteDisabled}
           hasLocal={hasLocal}
+          onDelete={props.onDelete}
           onOpenTerminal={onOpenTerminal}
+          project={project}
           repository={repository}
         />
       }

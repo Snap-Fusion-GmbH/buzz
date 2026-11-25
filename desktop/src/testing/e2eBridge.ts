@@ -6306,6 +6306,7 @@ const MOCK_PROJECT_SUBJECTS = [
 ];
 
 const MOCK_PROJECT_KINDS = new Set<number>([
+  KIND_DELETION,
   KIND_PROJECT_ANNOUNCEMENT,
   KIND_REPO_ANNOUNCEMENT,
   KIND_REPO_STATE,
@@ -6498,6 +6499,31 @@ function buildMockProjectEvents(): RelayEvent[] {
   }
 
   return events;
+}
+
+/**
+ * Store an accepted project-scoped event. Like the relay, a NIP-09 `a`-tag
+ * deletion removes the addressed announcement heads it dominates.
+ */
+function storeMockProjectEvent(event: RelayEvent): void {
+  const store = getMockProjectEventStore();
+  if (event.kind === KIND_DELETION) {
+    const coordinate = event.tags.find((tag) => tag[0] === "a")?.[1];
+    const [kind, pubkey, dtag] = coordinate?.split(":") ?? [];
+    if (kind && pubkey && dtag !== undefined) {
+      const remaining = store.filter(
+        (candidate) =>
+          !(
+            String(candidate.kind) === kind &&
+            candidate.pubkey.toLowerCase() === pubkey.toLowerCase() &&
+            candidate.created_at <= event.created_at &&
+            candidate.tags.some((tag) => tag[0] === "d" && tag[1] === dtag)
+          ),
+      );
+      store.splice(0, store.length, ...remaining);
+    }
+  }
+  store.push(event);
 }
 
 function getMockProjectEventStore(): RelayEvent[] {
@@ -11448,7 +11474,7 @@ function sendToMockSocket(args: {
         ]);
         return;
       }
-      getMockProjectEventStore().push(event);
+      storeMockProjectEvent(event);
       const acceptedProjectEvents =
         window.__BUZZ_E2E_ACCEPTED_PROJECT_EVENTS__ ?? [];
       acceptedProjectEvents.push({
@@ -13515,7 +13541,7 @@ export function maybeInstallE2eTauriMocks() {
             );
             publicationError = "mock project event rejection";
           } else {
-            getMockProjectEventStore().push(event);
+            storeMockProjectEvent(event);
             const acceptedProjectEvents =
               window.__BUZZ_E2E_ACCEPTED_PROJECT_EVENTS__ ?? [];
             acceptedProjectEvents.push({
@@ -13577,7 +13603,7 @@ export function maybeInstallE2eTauriMocks() {
           input.createdAt,
         );
         window.__BUZZ_E2E_SIGNED_EVENTS__?.push(event);
-        getMockProjectEventStore().push(event);
+        storeMockProjectEvent(event);
         return null;
       }
       case "sign_project_pull_request_review_request": {
@@ -13606,7 +13632,7 @@ export function maybeInstallE2eTauriMocks() {
           kind: event.kind,
           tags: event.tags,
         });
-        getMockProjectEventStore().push(event);
+        storeMockProjectEvent(event);
         return null;
       }
       case "publish_project_pull_request_merged_status": {
@@ -13617,7 +13643,7 @@ export function maybeInstallE2eTauriMocks() {
         if (event.pubkey !== input.targetOwner) {
           throw new Error("mock merged status owner mismatch");
         }
-        getMockProjectEventStore().push(event);
+        storeMockProjectEvent(event);
         return null;
       }
       case "merge_project_pull_request": {

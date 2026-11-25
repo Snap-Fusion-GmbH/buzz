@@ -49,10 +49,17 @@ export function useDeleteProjectHandler(
     async (project: Project) => {
       try {
         await mutateAsync(project);
-        toast.success("Project deleted");
+        // A legacy read model is a standalone repository, not a project.
+        toast.success(
+          project.legacy ? "Repository deleted" : "Project deleted",
+        );
       } catch (error) {
         toast.error(
-          error instanceof Error ? error.message : "Failed to delete project",
+          error instanceof Error
+            ? error.message
+            : project.legacy
+              ? "Failed to delete repository"
+              : "Failed to delete project",
         );
       }
     },
