@@ -133,7 +133,7 @@ fn upload_project_files_blocking(
     clone_url: &str,
     default_branch: Option<&str>,
     sources: &[PathBuf],
-    private_key_nsec: &str,
+    signing_keys: &Keys,
     auth: &GitAuthConfig,
 ) -> Result<ProjectRepoUploadResult, String> {
     let _operation_guard = PROJECT_UPLOAD_LOCK
@@ -168,8 +168,6 @@ fn upload_project_files_blocking(
         .and_then(|value| normalize_branch_option(Some(&value)))
         .or_else(|| default_branch.map(str::to_string))
         .ok_or_else(|| "The repository does not have a branch selected.".to_string())?;
-    let signing_keys =
-        Keys::parse(private_key_nsec).map_err(|error| format!("invalid signing key: {error}"))?;
     let UploadDestinations {
         pending: destinations,
         selected_names: names,
@@ -280,7 +278,7 @@ fn upload_project_files_blocking(
             || error.contains("HTTP 403")
             || error.contains("missing Authorization")
         {
-            let header = push_authorization_header(clone_url, &signing_keys)?;
+            let header = push_authorization_header(clone_url, signing_keys)?;
             run_git(
                 &[
                     "-c",
@@ -331,7 +329,9 @@ pub async fn pick_and_upload_project_files(
 ) -> Result<Option<ProjectRepoUploadResult>, String> {
     validate_workspace_clone_url(&clone_url, &state)?;
     let auth = build_git_auth_config(&state)?;
-    let pubkey = state.signing_keys()?.public_key().to_hex();
+    // Commit authorship and the push authorization must use the workspace
+    // identity itself; a hex public key would parse as an unrelated secret.
+    let signing_keys = state.signing_keys()?;
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog().file().pick_files(move |paths| {
         let _ = tx.send(paths);
@@ -358,7 +358,7 @@ pub async fn pick_and_upload_project_files(
             &clone_url,
             default_branch.as_deref(),
             &sources,
-            &pubkey,
+            &signing_keys,
             &auth,
         )
         .map(Some)
@@ -369,8 +369,10 @@ pub async fn pick_and_upload_project_files(
 
 #[cfg(test)]
 mod tests {
-    use super::upload_project_files_blocking;
+    use super::{upload_project_files_blocking, BASE64};
     use crate::commands::project_git_exec::{build_test_git_auth_config, run_git};
+    use base64::Engine as _;
+    use nostr::{JsonUtil, Keys};
     use std::path::{Path, PathBuf};
 
     struct Fixture {
@@ -427,7 +429,7 @@ mod tests {
             fixture.remote.to_str().expect("remote path"),
             Some("main"),
             sources,
-            &"a".repeat(64),
+            &Keys::generate(),
             &auth,
         )
         .map(|result| result.commit)
@@ -513,7 +515,7 @@ mod tests {
             original_remote.to_str().expect("path"),
             Some("main"),
             std::slice::from_ref(&fixture.source),
-            &"a".repeat(64),
+            &Keys::generate(),
             &auth,
         )
         .expect_err("push must fail");
@@ -591,20 +593,40 @@ mod tests {
         std::fs::set_permissions(&script, permissions).expect("script executable");
         let mut auth = build_test_git_auth_config().expect("git auth");
         auth.git_path = script;
+        let identity = Keys::generate();
         let commit = upload_project_files_blocking(
             fixture.root.path().to_str(),
             "checkout",
             fixture.remote.to_str().expect("remote path"),
             Some("main"),
             std::slice::from_ref(&fixture.source),
-            &"a".repeat(64),
+            &identity,
             &auth,
         )
         .expect("authenticated retry");
         assert_eq!(commit.commit, head(&fixture.checkout));
         let arguments = std::fs::read_to_string(log).expect("argument log");
-        assert!(arguments.contains("http.extraHeader=Authorization: Nostr "));
         assert!(arguments.contains("push"));
+        // The relay admits the workspace identity, so the retry header and the
+        // commit author must be that identity, not a key derived from it.
+        let header = arguments
+            .lines()
+            .find_map(|line| line.strip_prefix("http.extraHeader=Authorization: Nostr "))
+            .expect("signed authorization header");
+        let event = nostr::Event::from_json(BASE64.decode(header).expect("base64 header"))
+            .expect("authorization event");
+        event.verify().expect("valid authorization signature");
+        assert_eq!(event.pubkey, identity.public_key());
+        let author = run_git(
+            &["show", "--format=%ae", "--no-patch", "HEAD"],
+            Some(&fixture.checkout),
+            &build_test_git_auth_config().expect("git auth"),
+        )
+        .expect("commit author");
+        assert_eq!(
+            author.trim(),
+            format!("{}@users.noreply.buzz", identity.public_key().to_hex())
+        );
     }
 
     #[test]
