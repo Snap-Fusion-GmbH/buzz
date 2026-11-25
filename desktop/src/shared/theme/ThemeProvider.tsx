@@ -62,7 +62,7 @@ export const ACCENT_COLORS = [
 const LIGHT_ONLY_ACCENTS = new Set<string>(["#d7d72e"]);
 const ACCENT_TEXT_CONTRAST = 4.5;
 
-const DEFAULT_ACCENT = "#3b82f6";
+const DEFAULT_ACCENT = "#6366f1";
 
 type ThemeContextValue = {
   themeName: string;
@@ -592,10 +592,9 @@ export function ThemeProvider({
   const [followSystem, setFollowSystemState] = useState<boolean>(() => {
     const stored = getStorageItem(FOLLOW_SYSTEM_KEY);
     if (stored !== null) return stored === "true";
-    // Fresh profiles (no saved theme) default to System mode so the Buzz
-    // default tracks the OS light/dark scheme. Profiles that picked a theme
-    // before this toggle existed keep their fixed theme until they opt in.
-    return getStorageItem(THEME_STORAGE_KEY) === null;
+    // Fresh profiles start on the fixed dark default theme; System mode is
+    // an explicit opt-in.
+    return false;
   });
   const [systemIsDark, setSystemIsDark] = useState<boolean>(() => {
     return window.matchMedia("(prefers-color-scheme: dark)").matches;

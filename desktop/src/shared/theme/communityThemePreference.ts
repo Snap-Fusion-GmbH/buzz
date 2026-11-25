@@ -13,11 +13,13 @@ export type CommunityThemePreference = {
   followSystem: boolean;
 };
 
+// Snap Fusion default: GitHub Dark with the Indigo accent, independent of the
+// OS appearance. A saved preference always wins.
 export const DEFAULT_COMMUNITY_THEME: CommunityThemePreference = Object.freeze({
   version: 1,
-  theme: "buzz",
-  accent: "#3b82f6",
-  followSystem: true,
+  theme: "github-dark-default",
+  accent: "#6366f1",
+  followSystem: false,
 });
 
 const THEME_NAMES = new Set<string>(SYNTAX_THEMES);

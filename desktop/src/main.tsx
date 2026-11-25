@@ -92,7 +92,7 @@ function renderApp() {
           <CommunityOnboardingProvider
             enabled={huddleWindowChannelId() === null}
           >
-            <ThemeProvider defaultTheme="buzz">
+            <ThemeProvider defaultTheme="github-dark-default">
               <TooltipProvider>
                 <EmojiBurstProvider>
                   <PoofBurstProvider>
