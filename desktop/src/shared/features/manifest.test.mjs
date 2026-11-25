@@ -21,6 +21,8 @@ test("existing Projects and Workflows experiments remain unchanged", () => {
       id: "projects",
       name: "Projects",
       description: "Git repository browser and collaboration",
+      // Projects ships on by default; an explicit opt-out still wins.
+      defaultEnabled: true,
       platforms: ["desktop"],
     },
     workflows: {
