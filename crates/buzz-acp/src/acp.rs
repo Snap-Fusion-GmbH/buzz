@@ -1429,6 +1429,9 @@ impl AcpClient {
         let mut idle_deadline = now + idle_timeout;
         let mut hard_deadline = hard_deadline;
         let mut last_activity_at = now;
+        // ACP v2 acknowledges session/prompt with a `messageId` before the
+        // turn runs; the turn then ends with an idle `state_update`.
+        let mut v2_turn_pending = false;
 
         loop {
             // Determine which deadline fires first BEFORE sleeping — this is
@@ -1766,6 +1769,10 @@ impl AcpClient {
                                     }
                                     return Err(agent_error_from_json(error));
                                 }
+                                if is_v2_prompt_ack(&msg["result"]) {
+                                    v2_turn_pending = true;
+                                    continue;
+                                }
                                 if let Some((_, _, ack_tx)) = pending_steer.take() {
                                     let _ =
                                         ack_tx.send(crate::pool::SteerAck::PromptCompletedNeutral);
@@ -1784,6 +1791,16 @@ impl AcpClient {
                                     idle_deadline = activity_now + idle_timeout;
                                     last_activity_at = activity_now;
                                     tracing::debug!("idle clock reset: tool call started");
+                                }
+                                if v2_turn_pending {
+                                    if let Some(result) = v2_turn_end(&msg, session_id) {
+                                        if let Some((_, _, ack_tx)) = pending_steer.take() {
+                                            let _ = ack_tx.send(
+                                                crate::pool::SteerAck::PromptCompletedNeutral,
+                                            );
+                                        }
+                                        return Ok(result);
+                                    }
                                 }
                             }
                             "_goose/unstable/session/update" => {
@@ -2122,6 +2139,35 @@ impl AcpClient {
         StopReason::from_str(raw)
             .ok_or_else(|| AcpError::Protocol(format!("unknown stopReason: {raw:?}")))
     }
+}
+
+/// ACP v2 answers `session/prompt` at once with `{messageId}` and runs the
+/// turn asynchronously; v1 answers only when the turn ends, with `stopReason`.
+fn is_v2_prompt_ack(result: &serde_json::Value) -> bool {
+    result.get("stopReason").is_none() && result.get("messageId").is_some()
+}
+
+/// The prompt result for an ACP v2 turn: its session's `state_update` with
+/// `state: "idle"` carries the `stopReason` (and the turn's `usage`).
+fn v2_turn_end(msg: &serde_json::Value, session_id: &str) -> Option<serde_json::Value> {
+    let params = &msg["params"];
+    if params
+        .get("sessionId")
+        .and_then(|value| value.as_str())
+        .is_some_and(|id| id != session_id)
+    {
+        return None;
+    }
+    let update = &params["update"];
+    if update["sessionUpdate"] != "state_update" || update["state"] != "idle" {
+        return None;
+    }
+    let stop_reason = update.get("stopReason")?.clone();
+    let mut result = serde_json::json!({ "stopReason": stop_reason });
+    if let Some(usage) = update.get("usage") {
+        result["usage"] = usage.clone();
+    }
+    Some(result)
 }
 
 /// Build `session/prompt` params from one or more text content blocks.
@@ -4827,6 +4873,55 @@ sleep 1"#,
         assert_eq!(usage.cumulative_cost_usd, Some(0.5));
         drop(client);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// ACP v2 (claude-agent-acp 0.112+): the prompt is acknowledged with a
+    /// messageId and the turn ends with an idle state_update. Treating the ack
+    /// as the result failed every turn ("missing stopReason").
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn v2_prompt_ack_waits_for_the_idle_state_update() {
+        let script = r#"
+            read -r REQ
+            ID=$(printf '%s' "$REQ" | sed -E 's/.*"id":([0-9]+).*/\1/')
+            echo '{"jsonrpc":"2.0","id":'"$ID"',"result":{"messageId":"m-1"}}'
+            echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"v2-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"OK"}}}}'
+            echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"other-session","update":{"sessionUpdate":"state_update","state":"idle","stopReason":"cancelled"}}}'
+            echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"v2-session","update":{"sessionUpdate":"state_update","state":"idle","stopReason":"end_turn","usage":{"inputTokens":7,"outputTokens":3,"totalTokens":10}}}}'
+            sleep 1
+        "#;
+        let (mut client, dir) = spawn_named_script("claude-code", script).await;
+        client.notify_session_spawned("v2-session");
+
+        let stop = client
+            .session_prompt_with_idle_timeout(
+                "v2-session",
+                "hello",
+                std::time::Duration::from_secs(2),
+                std::time::Duration::from_secs(5),
+            )
+            .await
+            .expect("v2 prompt completes on its idle state update");
+        assert_eq!(stop, StopReason::EndTurn);
+        let usage = client.take_turn_usage().expect("v2 turn usage");
+        assert_eq!(usage.turn_output_tokens, Some(3));
+        drop(client);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn v2_turn_end_ignores_other_sessions_and_busy_states() {
+        let update = |session: &str, state: &str| {
+            serde_json::json!({"params": {"sessionId": session, "update": {
+                "sessionUpdate": "state_update", "state": state, "stopReason": "end_turn"}}})
+        };
+        assert!(v2_turn_end(&update("s", "idle"), "s").is_some());
+        assert!(v2_turn_end(&update("other", "idle"), "s").is_none());
+        assert!(v2_turn_end(&update("s", "running"), "s").is_none());
+        assert!(is_v2_prompt_ack(&serde_json::json!({"messageId": "m"})));
+        assert!(!is_v2_prompt_ack(
+            &serde_json::json!({"stopReason": "end_turn"})
+        ));
     }
 
     #[tokio::test]
