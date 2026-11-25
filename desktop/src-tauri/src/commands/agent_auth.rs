@@ -86,6 +86,48 @@ fn cli_login_args(runtime_id: &str) -> Option<&'static [&'static str]> {
     }
 }
 
+/// The command updating a setup harness's vendor CLI, shown before it runs:
+/// Claude Code updates itself; Codex re-runs its official installer.
+pub(crate) fn cli_update_command(runtime_id: &str) -> Option<String> {
+    match runtime_id {
+        "claude" => Some("claude update".to_string()),
+        "codex" => known_acp_runtime_exact(runtime_id)?
+            .cli_install_commands_for_os()
+            .first()
+            .map(|command| (*command).to_string()),
+        _ => None,
+    }
+}
+
+/// Update a setup harness's vendor CLI in a visible terminal, so the user
+/// sees (and can stop) the vendor's own updater.
+#[tauri::command]
+pub async fn update_harness_cli(runtime_id: String) -> Result<ConnectAcpRuntimeResult, String> {
+    tokio::task::spawn_blocking(move || {
+        let runtime = known_acp_runtime_exact(&runtime_id)
+            .ok_or_else(|| format!("unknown ACP runtime: {runtime_id}"))?;
+        let command = cli_update_command(&runtime_id)
+            .ok_or_else(|| format!("{} has no CLI updater", runtime.label))?;
+        let argv: Vec<String> = if runtime_id == "claude" {
+            let cli = runtime.underlying_cli.and_then(resolve_command);
+            let cli = cli.ok_or_else(|| format!("{} is not installed", runtime.label))?;
+            vec![cli.display().to_string(), "update".to_string()]
+        } else if cfg!(windows) {
+            ["powershell", "-NoProfile", "-Command", command.as_str()]
+                .map(String::from)
+                .to_vec()
+        } else {
+            ["/bin/sh", "-c", command.as_str()]
+                .map(String::from)
+                .to_vec()
+        };
+        launch_visible_terminal(&argv)?;
+        Ok(ConnectAcpRuntimeResult { launched: true })
+    })
+    .await
+    .map_err(|error| format!("CLI update task failed: {error}"))?
+}
+
 fn launch_cli_login_blocking(runtime_id: &str) -> Result<ConnectAcpRuntimeResult, String> {
     let runtime = known_acp_runtime_exact(runtime_id)
         .ok_or_else(|| format!("unknown ACP runtime: {runtime_id}"))?;

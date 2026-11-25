@@ -161,6 +161,7 @@ pub async fn delete_custom_harness(id: String, app: tauri::AppHandle) -> Result<
 pub async fn install_acp_runtime(
     runtime_id: String,
     adapter_only: Option<bool>,
+    upgrade_adapter: Option<bool>,
     app: tauri::AppHandle,
 ) -> Result<InstallRuntimeResult, String> {
     // ── Phase 1: blocking install ────────────────────────────────────────────
@@ -172,7 +173,13 @@ pub async fn install_acp_runtime(
     let runtime_id_clone = runtime_id.clone();
     let app_clone = app.clone();
     let install_result = tokio::task::spawn_blocking(move || {
-        install_acp_runtime_blocking(&runtime_id_clone, adapter_only == Some(true), &app_clone)
+        let upgrade = upgrade_adapter == Some(true);
+        install_acp_runtime_blocking(
+            &runtime_id_clone,
+            adapter_only == Some(true),
+            upgrade,
+            &app_clone,
+        )
     })
     .await
     .map_err(|e| format!("install task panicked: {e}"))??;
@@ -209,6 +216,7 @@ pub async fn install_acp_runtime(
 fn install_acp_runtime_blocking(
     runtime_id: &str,
     adapter_only: bool,
+    upgrade_adapter: bool,
     app: &tauri::AppHandle,
 ) -> Result<InstallRuntimeResult, String> {
     // Re-fetch the login-shell PATH so a Node.js installation that happened
@@ -265,7 +273,10 @@ fn install_acp_runtime_blocking(
     // For the codex runtime, "found" is not enough — the resolved binary must also
     // pass the 1.x version gate. An outdated 0.16.x adapter must be overwritten by
     // the new npm install so the CODEX_CONFIG spawn contract works correctly.
-    let adapter_path = resolve_adapter_path(runtime.commands, runtime.adapter_install_commands);
+    // An upgrade reinstalls a present adapter at `@latest` (`harness_updates`).
+    let adapter_path = (!upgrade_adapter)
+        .then(|| resolve_adapter_path(runtime.commands, runtime.adapter_install_commands))
+        .flatten();
     let adapter_probe_path = crate::managed_agents::readiness::cli_probe::augmented_path();
     if let Some(cmds) = plan_adapter_install(
         runtime_id,
@@ -283,6 +294,8 @@ fn install_acp_runtime_blocking(
         }
 
         for cmd in cmds {
+            let pinned = harness_updates::with_latest_tag(cmd, upgrade_adapter);
+            let cmd = pinned.as_str();
             let planned = match if use_managed_npm {
                 managed_npm_command(cmd)
             } else {
@@ -981,6 +994,8 @@ pub async fn discover_managed_agent_prereqs(
 
 mod cli_install_decision;
 mod custom_harness_entry;
+mod harness_updates;
+pub use harness_updates::check_harness_updates;
 mod relay_directory;
 #[cfg(test)]
 use relay_directory::advance_relay_cursor;

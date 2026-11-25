@@ -884,11 +884,15 @@ export async function deleteCustomHarness(id: string): Promise<void> {
  */
 export async function installAcpRuntime(
   runtimeId: string,
-  options?: { adapterOnly?: boolean },
+  options?: { adapterOnly?: boolean; upgradeAdapter?: boolean },
 ): Promise<InstallRuntimeResult> {
   const raw = await invokeTauri<RawInstallRuntimeResult>(
     "install_acp_runtime",
-    options?.adapterOnly ? { runtimeId, adapterOnly: true } : { runtimeId },
+    {
+      runtimeId,
+      ...(options?.adapterOnly ? { adapterOnly: true } : {}),
+      ...(options?.upgradeAdapter ? { upgradeAdapter: true } : {}),
+    },
   );
   return fromRawInstallRuntimeResult(raw);
 }

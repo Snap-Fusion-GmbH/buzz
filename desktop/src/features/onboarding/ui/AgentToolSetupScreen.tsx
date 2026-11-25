@@ -8,6 +8,7 @@ import {
   useInstallAcpRuntimeMutation,
 } from "@/features/agents/hooks";
 import { useInstallOutputLine } from "@/features/agents/lib/useInstallOutputLine";
+import { HarnessUpdateNotice } from "@/features/agents/ui/HarnessUpdateNotice";
 import {
   agentToolSetupRuntimes,
   agentToolStatus,
@@ -108,6 +109,7 @@ function AgentToolRow({
     );
   } else if (status.kind === "ready") {
     detail = "Ready";
+    body = <HarnessUpdateNotice runtime={runtime} />;
     action = (
       <Check aria-label="Ready" className="h-4 w-4 text-primary" role="img" />
     );

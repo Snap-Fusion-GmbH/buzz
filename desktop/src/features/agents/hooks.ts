@@ -2,9 +2,11 @@ import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
+  checkHarnessUpdates,
   connectAcpRuntime,
   discoverAcpAuthMethods,
   launchCliLogin,
+  updateHarnessCli,
 } from "@/shared/api/tauriAgentAuth";
 import {
   attachManagedAgentToChannel,
@@ -267,6 +269,39 @@ export function useAcpAuthMethodsQuery(
     queryKey: [...acpAuthMethodsQueryKey, runtimeId],
     queryFn: () => discoverAcpAuthMethods(runtimeId),
     staleTime: 30_000,
+  });
+}
+
+export const harnessUpdatesQueryKey = ["harness-updates"] as const;
+
+/** Adapter and CLI update availability; checked at most hourly (npm registry). */
+export function useHarnessUpdatesQuery() {
+  return useQuery({
+    queryKey: harnessUpdatesQueryKey,
+    queryFn: checkHarnessUpdates,
+    staleTime: 60 * 60_000,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+}
+
+/** Reinstall a harness adapter at its latest version (Buzz-managed npm). */
+export function useUpgradeAdapterMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (runtimeId: string) =>
+      installAcpRuntime(runtimeId, { adapterOnly: true, upgradeAdapter: true }),
+    onSettled: () => {
+      void refreshAcpRuntimes(queryClient);
+      void queryClient.invalidateQueries({ queryKey: harnessUpdatesQueryKey });
+    },
+  });
+}
+
+/** Open the vendor CLI updater in a terminal; recheck versions afterwards. */
+export function useUpdateHarnessCliMutation() {
+  return useMutation({
+    mutationFn: (runtimeId: string) => updateHarnessCli(runtimeId),
   });
 }
 

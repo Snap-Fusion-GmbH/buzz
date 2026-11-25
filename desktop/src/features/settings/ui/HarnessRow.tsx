@@ -1,6 +1,7 @@
 import * as React from "react";
 import { EllipsisVertical, ExternalLink } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { HarnessUpdateNotice } from "@/features/agents/ui/HarnessUpdateNotice";
 
 import {
   useAcpAuthMethodsQuery,
@@ -547,6 +548,7 @@ export function HarnessRow({
             </div>
           </div>
         ) : null}
+        <HarnessUpdateNotice runtime={runtime} />
         {deleteError ? (
           <p className="mt-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-1.5 text-sm text-destructive">
             {deleteError}

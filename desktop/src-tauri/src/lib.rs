@@ -637,6 +637,8 @@ pub fn run() {
             delete_custom_harness,
             connect_acp_runtime,
             launch_cli_login,
+            update_harness_cli,
+            check_harness_updates,
             discover_managed_agent_prereqs,
             sign_event,
             sign_nostr_identity_binding,

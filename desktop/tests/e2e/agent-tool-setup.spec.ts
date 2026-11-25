@@ -2,6 +2,7 @@ import { expect, type Page, test } from "@playwright/test";
 
 import type { ManagedWorkspaceStatus } from "../../src/shared/api/tauriManagedWorkspace";
 import { installMockBridge } from "../helpers/bridge";
+import { openSettings } from "../helpers/settings";
 
 const signedIn: ManagedWorkspaceStatus = {
   enabled: true,
@@ -350,4 +351,228 @@ test("a signed-out or missing harness never blocks Buzz", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByTestId("app-sidebar")).toBeVisible();
   await expect(page.getByTestId(/^required-agent-/)).toHaveCount(0);
+});
+
+const CLAUDE_UPDATES = {
+  runtime_id: "claude",
+  adapter: { installed: "0.112.0", latest: "0.113.0", update_available: true },
+  cli: { installed: "2.1.332", latest: "2.1.340", update_available: true },
+  cli_update_command: "claude update",
+};
+
+function commandPayloads(page: Page, command: string) {
+  return page.evaluate(
+    (name) =>
+      (
+        (
+          window as Window & {
+            __BUZZ_E2E_COMMAND_LOG__?: Array<{
+              command: string;
+              payload: unknown;
+            }>;
+          }
+        ).__BUZZ_E2E_COMMAND_LOG__ ?? []
+      )
+        .filter((entry) => entry.command === name)
+        .map((entry) => entry.payload),
+    command,
+  );
+}
+
+test("an outdated harness offers its adapter and CLI updates", async ({
+  page,
+}) => {
+  await installMockBridge(
+    page,
+    {
+      managedWorkspace: { status: signedIn },
+      acpRuntimesCatalog: [CLAUDE_READY, BUZZ_AGENT],
+      harnessUpdates: [CLAUDE_UPDATES],
+    },
+    {
+      skipCommunitySeed: true,
+      skipOnboardingSeed: true,
+      relayWsUrl: "wss://managed.example.invalid",
+      seedAgentToolSetupDone: false,
+    },
+  );
+  await page.goto("/");
+
+  const notice = page.getByTestId("harness-update-claude");
+  await expect(notice).toContainText(
+    "Adapter update available 0.112.0 → 0.113.0",
+  );
+  await expect(notice).toContainText(
+    "Claude Code update available 2.1.332 → 2.1.340",
+  );
+
+  // The Buzz-managed adapter reinstalls at its latest version, adapter-only.
+  await notice.getByRole("button", { name: "Update adapter" }).click();
+  await expect
+    .poll(() => commandPayloads(page, "install_acp_runtime"))
+    .toEqual([
+      { runtimeId: "claude", adapterOnly: true, upgradeAdapter: true },
+    ]);
+
+  // The CLI update shows the vendor command and runs only when confirmed.
+  await notice.getByRole("button", { name: "Update Claude Code" }).click();
+  await expect(notice).toContainText("claude update");
+  expect(await commandPayloads(page, "update_harness_cli")).toEqual([]);
+  await notice.getByRole("button", { name: "Run update" }).click();
+  await expect(notice).toContainText(
+    "Finish the update in the Terminal window",
+  );
+  expect(await commandPayloads(page, "update_harness_cli")).toEqual([
+    { runtimeId: "claude" },
+  ]);
+});
+
+test("a current harness shows no update notice", async ({ page }) => {
+  await installMockBridge(
+    page,
+    {
+      managedWorkspace: { status: signedIn },
+      acpRuntimesCatalog: [CLAUDE_READY, BUZZ_AGENT],
+      harnessUpdates: [
+        {
+          ...CLAUDE_UPDATES,
+          adapter: {
+            installed: "0.113.0",
+            latest: "0.113.0",
+            update_available: false,
+          },
+          cli: {
+            installed: "2.1.340",
+            latest: "2.1.340",
+            update_available: false,
+          },
+        },
+      ],
+    },
+    {
+      skipCommunitySeed: true,
+      skipOnboardingSeed: true,
+      relayWsUrl: "wss://managed.example.invalid",
+      seedAgentToolSetupDone: false,
+    },
+  );
+  await page.goto("/");
+  await expect(page.getByTestId("agent-tool-claude-status")).toHaveText(
+    "Ready",
+  );
+  await expect(page.getByTestId("harness-update-claude")).toHaveCount(0);
+});
+
+test("Settings shows a harness update on its runtime row", async ({ page }) => {
+  await installMockBridge(page, {
+    acpRuntimesCatalog: [CLAUDE_READY, BUZZ_AGENT],
+    harnessUpdates: [CLAUDE_UPDATES],
+  });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await openSettings(page, "agents");
+  await expect(
+    page
+      .getByTestId("doctor-runtime-claude")
+      .getByTestId("harness-update-claude"),
+  ).toContainText("Adapter update available 0.112.0 → 0.113.0");
+});
+
+test("a failed automatic install explains why and can be retried", async ({
+  page,
+}) => {
+  const failed = {
+    success: false,
+    steps: [
+      {
+        step: "adapter",
+        command: "npm install -g @agentclientprotocol/claude-agent-acp",
+        success: false,
+        stdout: "",
+        stderr: "npm ERR! network request failed",
+        exit_code: 1,
+      },
+    ],
+    restarted_count: 0,
+    failed_restart_count: 0,
+    log_path: null,
+  };
+  await installMockBridge(
+    page,
+    {
+      managedWorkspace: { status: signedIn },
+      acpRuntimesCatalog: [CLAUDE_ADAPTER_MISSING, BUZZ_AGENT],
+      acpRuntimesCatalogAfterInstall: [CLAUDE_READY, BUZZ_AGENT],
+      installAcpRuntimeResults: [
+        failed,
+        { ...failed, success: true, steps: [] },
+      ],
+    },
+    {
+      skipCommunitySeed: true,
+      skipOnboardingSeed: true,
+      relayWsUrl: "wss://managed.example.invalid",
+      seedAgentToolSetupDone: false,
+    },
+  );
+  await page.goto("/");
+
+  const claude = page.getByTestId("agent-tool-claude");
+  await expect(page.getByTestId("agent-tool-claude-status")).toHaveText(
+    "Install failed",
+  );
+  await expect(claude).toContainText("npm ERR! network request failed");
+  // The failure never blocks the app, and is not retried automatically.
+  await expect(
+    page.getByRole("button", { name: "Skip for now" }),
+  ).toBeEnabled();
+  expect(await commandPayloads(page, "install_acp_runtime")).toHaveLength(1);
+
+  await claude.getByRole("button", { name: "Retry" }).click();
+  await expect(page.getByTestId("agent-tool-claude-status")).toHaveText(
+    "Ready",
+  );
+  expect(await commandPayloads(page, "install_acp_runtime")).toEqual([
+    { runtimeId: "claude", adapterOnly: true },
+    { runtimeId: "claude", adapterOnly: true },
+  ]);
+});
+
+test("a CLI with a broken configuration explains it and checks again", async ({
+  page,
+}) => {
+  await installMockBridge(
+    page,
+    {
+      managedWorkspace: { status: signedIn },
+      acpRuntimesCatalogSequence: [
+        [
+          {
+            ...CLAUDE_READY,
+            auth_status: {
+              status: "config_invalid",
+              diagnostic: "settings.json is not valid JSON",
+            },
+          },
+          BUZZ_AGENT,
+        ],
+        [CLAUDE_READY, BUZZ_AGENT],
+      ],
+    },
+    {
+      skipCommunitySeed: true,
+      skipOnboardingSeed: true,
+      relayWsUrl: "wss://managed.example.invalid",
+      seedAgentToolSetupDone: false,
+    },
+  );
+  await page.goto("/");
+
+  const claude = page.getByTestId("agent-tool-claude");
+  await expect(page.getByTestId("agent-tool-claude-status")).toHaveText(
+    "settings.json is not valid JSON",
+  );
+  await claude.getByRole("button", { name: "Check again" }).click();
+  await expect(page.getByTestId("agent-tool-claude-status")).toHaveText(
+    "Ready",
+  );
 });

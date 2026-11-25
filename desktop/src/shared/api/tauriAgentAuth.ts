@@ -57,6 +57,33 @@ export async function launchCliLogin(
   });
 }
 
+/** Update a setup harness's vendor CLI in a visible terminal. */
+export async function updateHarnessCli(
+  runtimeId: string,
+): Promise<ConnectAcpRuntimeResult> {
+  return invokeTauri<RawConnectAcpRuntimeResult>("update_harness_cli", {
+    runtimeId,
+  });
+}
+
+export type ComponentVersion = {
+  installed: string | null;
+  latest: string | null;
+  update_available: boolean;
+};
+
+export type HarnessUpdateInfo = {
+  runtime_id: string;
+  adapter: ComponentVersion;
+  cli: ComponentVersion;
+  cli_update_command: string | null;
+};
+
+/** Installed vs latest adapter and CLI versions of the setup harnesses. */
+export async function checkHarnessUpdates(): Promise<HarnessUpdateInfo[]> {
+  return invokeTauri<HarnessUpdateInfo[]>("check_harness_updates");
+}
+
 export async function connectAcpRuntime(
   runtimeId: string,
   methodId: string,

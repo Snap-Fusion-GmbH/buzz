@@ -301,6 +301,21 @@ type E2eConfig = {
     /** When true, the catalog discovery call throws — simulates a failed query. */
     acpRuntimesError?: boolean;
     acpAuthMethods?: Record<string, RawAcpAuthMethodsResult>;
+    /** Result of `check_harness_updates` (adapter and CLI versions). */
+    harnessUpdates?: Array<{
+      runtime_id: string;
+      adapter: {
+        installed: string | null;
+        latest: string | null;
+        update_available: boolean;
+      };
+      cli: {
+        installed: string | null;
+        latest: string | null;
+        update_available: boolean;
+      };
+      cli_update_command: string | null;
+    }>;
     acpAuthMethodsErrors?: Record<string, string>;
     acpAuthMethodsError?: string;
     /** When set, workflow updates fail with this message. */
@@ -13867,6 +13882,10 @@ export function maybeInstallE2eTauriMocks() {
           payload as { runtimeId?: string },
           activeConfig,
         );
+      case "check_harness_updates":
+        return activeConfig?.mock?.harnessUpdates ?? [];
+      case "update_harness_cli":
+        return { launched: true };
       case "launch_cli_login":
         mockConnectCompleted = true;
         return { launched: true };
