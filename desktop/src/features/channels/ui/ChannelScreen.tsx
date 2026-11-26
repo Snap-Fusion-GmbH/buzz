@@ -537,6 +537,7 @@ export function ChannelScreen({
     activeChannel && !activeChannel.archivedAt && activeChannel.isMember
       ? handleSendVideoReviewComment
       : undefined;
+  const handleOpenAddBot = React.useCallback(() => setIsAddBotOpen(true), []);
   const handleOpenMembersSidebar = () => setIsMembersSidebarOpen(true);
   const handleCloseChannelManagement = () => setChannelManagementOpen(false);
   const handleChannelManagementDeleted = React.useCallback(() => {
@@ -812,6 +813,7 @@ export function ChannelScreen({
                   header={channelHeader}
                   {...{ idleAuxiliaryHeaderActions, idleAuxiliaryOverridesThread, idleAuxiliaryPanel, idleAuxiliaryTitle, hasOlderMessages, historyExhausted }}
                   {...{ addFilesLabel, onAddFiles }}
+                  onAddAgent={handleOpenAddBot}
                   onBrowseChannels={openBrowseChannels}
                   onCreateChannel={openCreateChannel}
                   onOpenMembers={handleOpenMembersSidebar}
