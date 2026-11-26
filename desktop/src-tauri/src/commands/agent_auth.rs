@@ -17,6 +17,8 @@ use crate::managed_agents::{
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpAuthMethod {
+    /// ACP v2 adapters name it `methodId`.
+    #[serde(alias = "methodId")]
     pub id: String,
     pub name: String,
     pub description: Option<String>,
@@ -540,6 +542,15 @@ mod tests {
         run_buzz_acp_auth_command_with_paths, shell_escape, shell_join, uses_terminal_auth,
         windows_terminal_args, AcpAuthMethod,
     };
+
+    #[test]
+    fn auth_methods_parse_the_v2_method_id() {
+        let method: AcpAuthMethod = serde_json::from_str(
+            r#"{"methodId":"chat-gpt","name":"ChatGPT","description":null,"type":"agent"}"#,
+        )
+        .expect("ACP v2 auth method");
+        assert_eq!(method.id, "chat-gpt");
+    }
 
     #[test]
     fn cli_login_runs_each_vendors_own_login_subcommand() {

@@ -6250,12 +6250,23 @@ async fn spawn_auth_client(agent: &AuthAgentArgs) -> Result<AcpClient, acp::AcpE
     AcpClient::spawn(&agent.agent_command, &agent_args, &[], false).await
 }
 
+/// The adapter's advertised auth methods, each with an `id`. ACP v2 adapters
+/// (codex-acp 2.12) name it `methodId`; it is copied to `id` so callers and
+/// the `--json` output keep one shape.
 fn extract_auth_methods(init_result: &serde_json::Value) -> Vec<serde_json::Value> {
-    init_result
+    let mut methods = init_result
         .get("authMethods")
         .and_then(|methods| methods.as_array())
         .cloned()
-        .unwrap_or_default()
+        .unwrap_or_default();
+    for method in &mut methods {
+        if method.get("id").is_none() {
+            if let Some(id) = method.get("methodId").cloned() {
+                method["id"] = id;
+            }
+        }
+    }
+    methods
 }
 
 /// `buzz-acp auth-methods` — spawn an adapter, initialize it, print authMethods.
@@ -10777,6 +10788,26 @@ mod error_outcome_emission_tests {
             no_base_prompt: false,
             base_prompt_content: None,
         }
+    }
+
+    #[test]
+    fn auth_methods_carry_an_id_from_v1_and_v2_adapters() {
+        // codex-acp 2.12 (ACP v2) advertises `methodId`; v1 adapters `id`.
+        let init = serde_json::json!({"authMethods": [
+            {"methodId": "chat-gpt", "name": "ChatGPT", "type": "agent"},
+            {"id": "claude-login", "name": "Claude"},
+        ]});
+        let ids: Vec<_> = extract_auth_methods(&init)
+            .iter()
+            .map(|method| method["id"].as_str().map(str::to_string))
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                Some("chat-gpt".to_string()),
+                Some("claude-login".to_string())
+            ]
+        );
     }
 
     #[test]
