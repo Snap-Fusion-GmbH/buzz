@@ -1,5 +1,12 @@
 import * as React from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  type MutationState,
+  useIsMutating,
+  useMutation,
+  useMutationState,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 
 import {
   checkHarnessUpdates,
@@ -79,6 +86,7 @@ import type {
   Channel,
   CreateManagedAgentInput,
   CreatePersonaInput,
+  InstallRuntimeResult,
   ManagedAgent,
   UpdateManagedAgentInput,
   UpdatePersonaInput,
@@ -285,10 +293,72 @@ export function useHarnessUpdatesQuery() {
   });
 }
 
+/**
+ * Prefix shared by every runtime install so any screen can see one running;
+ * the last part tells a full install from an adapter install or upgrade.
+ */
+const acpRuntimeInstallMutationKey = ["acp-runtime-install"] as const;
+const fullInstallMutationKey = [...acpRuntimeInstallMutationKey, "full"];
+
+function isInstallOf(runtimeId: string) {
+  return (mutation: { state: { variables: unknown } }) =>
+    mutation.state.variables === runtimeId;
+}
+
+/**
+ * True while an install of `runtimeId` runs, whichever screen started it.
+ * An install outlives the component that started it (switching Settings
+ * sections remounts the rows), so a row must not offer Install again.
+ */
+export function useAcpRuntimeInstallInFlight(runtimeId: string): boolean {
+  return (
+    useIsMutating({
+      mutationKey: acpRuntimeInstallMutationKey,
+      predicate: isInstallOf(runtimeId),
+    }) > 0
+  );
+}
+
+/**
+ * The latest full install of `runtimeId` (pending, failed or finished), read
+ * from the mutation cache so its outcome survives the row that started it.
+ */
+export function useLatestRuntimeInstall(
+  runtimeId: string,
+): MutationState<InstallRuntimeResult, Error, string> | null {
+  const states = useMutationState({
+    filters: {
+      mutationKey: fullInstallMutationKey,
+      predicate: isInstallOf(runtimeId),
+    },
+    select: (mutation) =>
+      mutation.state as MutationState<InstallRuntimeResult, Error, string>,
+  });
+  return states.at(-1) ?? null;
+}
+
+/** Forget finished full installs of `runtimeId`, e.g. on "Check again". */
+export function useClearRuntimeInstallResults() {
+  const queryClient = useQueryClient();
+  return React.useCallback(
+    (runtimeId: string) => {
+      const cache = queryClient.getMutationCache();
+      for (const mutation of cache.findAll({
+        mutationKey: fullInstallMutationKey,
+        predicate: isInstallOf(runtimeId),
+      })) {
+        if (mutation.state.status !== "pending") cache.remove(mutation);
+      }
+    },
+    [queryClient],
+  );
+}
+
 /** Reinstall a harness adapter at its latest version (Buzz-managed npm). */
 export function useUpgradeAdapterMutation() {
   const queryClient = useQueryClient();
   return useMutation({
+    mutationKey: [...acpRuntimeInstallMutationKey, "upgrade"],
     mutationFn: (runtimeId: string) =>
       installAcpRuntime(runtimeId, { adapterOnly: true, upgradeAdapter: true }),
     onSettled: () => {
@@ -331,6 +401,7 @@ export function useConnectAcpRuntimeMutation() {
 export function useInstallAcpRuntimeMutation() {
   const queryClient = useQueryClient();
   return useMutation({
+    mutationKey: fullInstallMutationKey,
     mutationFn: (runtimeId: string) => installAcpRuntime(runtimeId),
     onSettled: () => {
       void refreshAcpRuntimes(queryClient);
@@ -343,6 +414,7 @@ export function useInstallAcpRuntimeMutation() {
 export function useInstallAcpAdapterMutation() {
   const queryClient = useQueryClient();
   return useMutation({
+    mutationKey: [...acpRuntimeInstallMutationKey, "adapter"],
     mutationFn: (runtimeId: string) =>
       installAcpRuntime(runtimeId, { adapterOnly: true }),
     onSettled: () => {

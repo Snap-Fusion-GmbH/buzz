@@ -7,7 +7,10 @@ import {
   useAcpAuthMethodsQuery,
   useConnectAcpRuntimeMutation,
   useDeleteCustomHarnessMutation,
+  useAcpRuntimeInstallInFlight,
+  useClearRuntimeInstallResults,
   useInstallAcpRuntimeMutation,
+  useLatestRuntimeInstall,
   useManagedAgentsQuery,
   usePersonasQuery,
 } from "@/features/agents/hooks";
@@ -312,22 +315,28 @@ export function HarnessRow({
   const [editing, setEditing] = React.useState(false);
   const [confirmingDelete, setConfirmingDelete] = React.useState(false);
   const [deleteError, setDeleteError] = React.useState<string | null>(null);
-  // Each row owns its mutation instance so concurrent installs each track
-  // their own isPending / result state independently.
-  const installMutation = useInstallAcpRuntimeMutation();
-  const [installResult, setInstallResult] = React.useState<{
-    success: boolean;
-    error: string | null;
-  } | null>(null);
-  // Clear stale install results when the parent triggers a catalog refresh
-  // (Check again) — the runtime may now be healthy and stale failure state
-  // would linger because keyed rows don't remount on refetch.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: resetEpoch is an intentional trigger only; its value is not consumed in the effect body
+  // Install state lives in the mutation cache, not this row: an install
+  // outlives the row (switching Settings sections remounts it), so a remounted
+  // row still shows it running, then its outcome, and never starts a second.
+  const { mutate: install } = useInstallAcpRuntimeMutation();
+  const isInstalling = useAcpRuntimeInstallInFlight(runtime.id);
+  const latestInstall = useLatestRuntimeInstall(runtime.id);
+  const clearInstallResults = useClearRuntimeInstallResults();
+  // "Check again" clears a stale outcome: the runtime may now be healthy.
+  const seenResetEpoch = React.useRef(resetEpoch);
   React.useEffect(() => {
-    setInstallResult(null);
-  }, [resetEpoch]);
-  const isInstalling = installMutation.isPending;
-  const installError = installResult?.error ?? null;
+    if (seenResetEpoch.current === resetEpoch) return;
+    seenResetEpoch.current = resetEpoch;
+    clearInstallResults(runtime.id);
+  }, [clearInstallResults, resetEpoch, runtime.id]);
+  const installError =
+    latestInstall?.status === "error"
+      ? latestInstall.error?.message || "Install failed."
+      : latestInstall?.status === "success" &&
+          latestInstall.data &&
+          !latestInstall.data.success
+        ? getInstallErrorMessage(latestInstall.data)
+        : null;
   const installOutputLine = useInstallOutputLine(runtime.id, isInstalling);
 
   const del = useDeleteCustomHarnessMutation();
@@ -345,25 +354,7 @@ export function HarnessRow({
   );
 
   function handleInstall() {
-    setInstallResult(null);
-    installMutation.mutate(runtime.id, {
-      onSuccess: (result) => {
-        if (result.success) {
-          setInstallResult({ success: true, error: null });
-        } else {
-          setInstallResult({
-            success: false,
-            error: getInstallErrorMessage(result),
-          });
-        }
-      },
-      onError: (error) => {
-        setInstallResult({
-          success: false,
-          error: error instanceof Error ? error.message : "Install failed.",
-        });
-      },
-    });
+    if (!isInstalling) install(runtime.id);
   }
 
   const canConnectAccount =

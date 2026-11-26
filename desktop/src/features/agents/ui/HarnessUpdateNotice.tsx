@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import {
   harnessUpdatesQueryKey,
+  useAcpRuntimeInstallInFlight,
   useHarnessUpdatesQuery,
   useUpdateHarnessCliMutation,
   useUpgradeAdapterMutation,
@@ -26,8 +27,9 @@ export function HarnessUpdateNotice({
 }) {
   const queryClient = useQueryClient();
   const updatesQuery = useHarnessUpdatesQuery();
-  const { mutateAsync: upgradeAdapter, isPending: upgrading } =
+  const { mutateAsync: upgradeAdapter, isPending: upgradePending } =
     useUpgradeAdapterMutation();
+  const upgrading = useAcpRuntimeInstallInFlight(runtime.id) || upgradePending;
   const { mutateAsync: updateCli, isPending: launching } =
     useUpdateHarnessCliMutation();
   const [confirmingCli, setConfirmingCli] = React.useState(false);

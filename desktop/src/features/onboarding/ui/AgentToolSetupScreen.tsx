@@ -3,6 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { Check, LoaderCircle } from "lucide-react";
 
 import {
+  useAcpRuntimeInstallInFlight,
   useAcpRuntimesQueryForced,
   useInstallAcpAdapterMutation,
   useInstallAcpRuntimeMutation,
@@ -48,11 +49,13 @@ function AgentToolRow({
   error,
   installBusy,
   installed,
-  installing,
+  installing: installingHere,
   onCheckAgain,
   onInstall,
   runtime,
 }: RowProps) {
+  // An adapter update started from this row's notice installs too.
+  const installing = useAcpRuntimeInstallInFlight(runtime.id) || installingHere;
   const status = agentToolStatus(runtime);
   const signIn = useRuntimeSignIn(runtime, {
     enabled: status.kind === "signed_out",

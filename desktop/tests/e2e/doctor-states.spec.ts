@@ -442,7 +442,7 @@ test.describe("Doctor panel state screenshots", () => {
         },
         BUZZ_AGENT_AVAILABLE,
       ],
-      installAcpRuntimeDelayMs: 250,
+      installAcpRuntimeDelayMs: 1_500,
       installAcpRuntimeResults: [
         {
           success: false,
@@ -513,6 +513,13 @@ test.describe("Doctor panel state screenshots", () => {
 
     // Install again — the install command exits 0, but verification fails.
     await installButton.click();
+    await expect(loading).toBeVisible();
+    await expect(installButton).toHaveCount(0);
+    // Switching sections mid-install remounts the row. It must still show the
+    // install running and never offer a second one, which the backend refuses
+    // with "an install is already in progress".
+    await page.getByTestId("settings-nav-appearance").click();
+    await page.getByTestId("settings-nav-agents").click();
     await expect(loading).toBeVisible();
     await expect(installButton).toHaveCount(0);
 
