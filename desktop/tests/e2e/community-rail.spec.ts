@@ -645,7 +645,12 @@ test.describe("community rail", () => {
   test("restores the last Home or channel destination per community", async ({
     page,
   }) => {
-    await installMockBridge(page, undefined, { skipCommunitySeed: true });
+    // Switching lands in a fresh community; keep its seeded channels.
+    await installMockBridge(
+      page,
+      { keepSeededWelcomeChannels: true },
+      { skipCommunitySeed: true },
+    );
     await seedCommunities(page, [COMMUNITY_A, COMMUNITY_B], COMMUNITY_A.id);
     await page.goto("/");
 
@@ -1056,7 +1061,12 @@ test.describe("community rail", () => {
   test("removing the active community restores the fallback destination", async ({
     page,
   }) => {
-    await installMockBridge(page, undefined, { skipCommunitySeed: true });
+    // Switching lands in a fresh community; keep its seeded channels.
+    await installMockBridge(
+      page,
+      { keepSeededWelcomeChannels: true },
+      { skipCommunitySeed: true },
+    );
     await seedCommunities(page, [COMMUNITY_A, COMMUNITY_B], COMMUNITY_A.id);
     await page.goto("/");
 

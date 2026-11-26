@@ -50,7 +50,12 @@ async function openAgentPicker(page: Page, channel = "random") {
 }
 
 test.describe("welcome and channel agent entry points", () => {
-  test("welcome offers chat-first creation", async ({ page }) => {
+  // The welcome guide's create-in-chat dialog was retired (6760d3c75): a
+  // welcome channel's Create an agent opens the same Add agent dialog as
+  // every other channel.
+  test("welcome Create an agent opens the Add agent dialog", async ({
+    page,
+  }) => {
     await installMockBridge(page, {
       activePersonaIds: ["builtin:fizz"],
       managedAgents: [
@@ -76,53 +81,12 @@ test.describe("welcome and channel agent entry points", () => {
       page.getByTestId("message-channel-intro").getByRole("button"),
     ).toHaveText(["Browse channels", "Create a channel", "Create an agent"]);
     await page.getByTestId("welcome-intro-action-create-agent").click();
-    const dialog = page.getByRole("dialog");
-    await expect(
-      dialog.getByRole("heading", { name: "Create an agent" }),
-    ).toBeVisible();
+    const dialog = page.getByTestId("add-channel-bot-dialog");
+    await expect(dialog).toBeVisible();
     await waitForAnimations(page);
-    await dialog.screenshot({ path: `${SHOTS}/01-welcome-create-choice.png` });
-
-    await page.getByTestId("welcome-create-agent-in-chat").click();
-    await expect(dialog).not.toBeVisible();
-    await expect(page.getByTestId("message-timeline")).toContainText(
-      "Fizz, help me create a new agent.",
-    );
-  });
-
-  test("welcome manual creation opens the canonical agent form", async ({
-    page,
-  }) => {
-    await installMockBridge(page, {
-      activePersonaIds: ["builtin:fizz"],
-      managedAgents: [
-        {
-          pubkey: FIZZ_PUBKEY,
-          name: "Fizz",
-          personaId: "builtin:fizz",
-          status: "running",
-          channelNames: ["Welcome"],
-        },
-      ],
-    });
-    await page.goto("/", { waitUntil: "domcontentloaded" });
-    await openCreateChannelDialog(page);
-    await page.getByTestId("create-channel-name").fill("Welcome");
-    await page.getByTestId("create-channel-permissions-option-private").click();
-    await page.getByTestId("create-channel-submit").click();
-    await expect(page.getByTestId("chat-title")).toHaveText("Welcome");
-    await page.getByTestId("welcome-intro-action-create-agent").click();
-    await page.getByTestId("welcome-create-agent-manually").click();
-
-    await expect(page).toHaveURL(/#\/channels\//);
-    await expect(page.getByTestId("chat-title")).toHaveText("Welcome");
-    await expect(
-      page.getByRole("dialog").getByRole("heading", { name: "Create agent" }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("button", { name: "Advanced", exact: true }),
-    ).toHaveAttribute("aria-expanded", "false");
-    await page.getByRole("button", { name: "Cancel" }).click();
+    await dialog.screenshot({ path: `${SHOTS}/01-welcome-create-agent.png` });
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
     await expect(page.getByTestId("chat-title")).toHaveText("Welcome");
   });
 

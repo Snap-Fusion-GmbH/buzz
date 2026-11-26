@@ -140,7 +140,10 @@ test("a relay membership denial refreshes the same workspace and clears the side
 }) => {
   await installMockBridge(
     page,
-    { managedWorkspace: { status: signedIn() } },
+    {
+      keepSeededWelcomeChannels: true,
+      managedWorkspace: { status: signedIn() },
+    },
     {
       skipCommunitySeed: true,
       skipOnboardingSeed: true,

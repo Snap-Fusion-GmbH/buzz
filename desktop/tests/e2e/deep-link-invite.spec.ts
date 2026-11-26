@@ -301,11 +301,9 @@ test("welcome retirement failures do not strand community onboarding", async ({
   );
   await page.goto("/");
 
-  await page.getByRole("button", { name: "Take me to Buzz" }).click();
-
   await expect(page.getByTestId("community-onboarding-flow")).toHaveCount(0);
   // Home, not a seeded channel: nothing is created for a new member.
-  await expect(page).toHaveURL(/#\/$/);
+  await expect(page).toHaveURL(/\/(#\/)?$/);
   await expect(page.getByTestId("home-inbox-list")).toBeVisible();
   expect(
     await page.evaluate(
@@ -327,10 +325,13 @@ test("create_channel is never called for a new member's first landing", async ({
   });
   await page.goto("/");
 
-  await page.getByRole("button", { name: "Take me to Buzz" }).click();
+  // The profile step is the last one since the starter-team intro retired.
+  await page.getByTestId("onboarding-display-name").fill("Tyler");
+  await page.getByTestId("onboarding-next").click();
 
   await expect(page.getByTestId("community-onboarding-flow")).toHaveCount(0);
-  await expect(page).toHaveURL(/#\/$/);
+  // Home, with or without its hash route.
+  await expect(page).toHaveURL(/\/(#\/)?$/);
   expect(
     await page.evaluate(
       () =>

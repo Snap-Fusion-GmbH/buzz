@@ -599,6 +599,7 @@ test("community switch validates a stale relay snapshot and replaces it", async 
     {
       channelsReadDelayMs: READ_DELAY_MS,
       honorChannelsKnownHash: true,
+      keepSeededWelcomeChannels: true,
     },
     { skipCommunitySeed: true },
   );
