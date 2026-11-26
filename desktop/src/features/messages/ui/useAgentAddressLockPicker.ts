@@ -342,6 +342,53 @@ export function useAgentAddressLockPicker({
     ],
   );
 
+  /**
+   * One-click "Use <agent>": pins the agent where the composer keeps an
+   * audience (a thread), otherwise mentions it once at the start of the
+   * draft. Never unpins or duplicates a mention the draft already has.
+   */
+  const addressAgent = React.useCallback(
+    (suggestion: MentionSuggestion) => {
+      const pubkey = normalizePubkey(suggestion.pubkey ?? "");
+      if (!pubkey || !suggestion.isAgent) return;
+      if (audienceScope) {
+        if (lockedAgentPubkeys.has(pubkey)) onPulseAddressLock(pubkey);
+        else toggleAlwaysAddressAgent(suggestion);
+        return;
+      }
+      const { text } = richText.getPlainTextAndCursor();
+      if (
+        mentions
+          .getDraftMentionRefs(text)
+          .some((ref) => normalizePubkey(ref.pubkey) === pubkey)
+      ) {
+        return;
+      }
+      const label =
+        mentions.registerMentionPubkey(suggestion.displayName, pubkey, {
+          isAgent: true,
+        }) ?? suggestion.displayName;
+      applyAutocompleteEdit({
+        replaceFromOffset: 0,
+        replaceToOffset: 0,
+        insertText: `@${label} `,
+        preserveSelection: text.length > 0,
+        reassertMentionCaret: false,
+      });
+      setAnnouncement(`Mentioning ${suggestion.displayName}`);
+    },
+    [
+      applyAutocompleteEdit,
+      audienceScope,
+      lockedAgentPubkeys,
+      mentions.getDraftMentionRefs,
+      mentions.registerMentionPubkey,
+      onPulseAddressLock,
+      richText.getPlainTextAndCursor,
+      toggleAlwaysAddressAgent,
+    ],
+  );
+
   const restoreAddressedAgentMentions = React.useCallback(
     (
       pubkeys?: readonly string[],
@@ -451,5 +498,6 @@ export function useAgentAddressLockPicker({
     syncAddressedAgentsFromText,
     toggleAlwaysAddressAgent,
     trackMentionAddressedAgent,
+    addressAgent,
   };
 }

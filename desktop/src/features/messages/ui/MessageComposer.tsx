@@ -41,6 +41,10 @@ import { useLinkEditor } from "@/features/messages/lib/useLinkEditor";
 import { useComposerSpoilerParticles } from "@/features/messages/lib/useComposerSpoilerParticles";
 import { useTypingBroadcast } from "@/features/messages/useTypingBroadcast";
 import { cn } from "@/shared/lib/cn";
+import {
+  ComposerAgentQuickPicks,
+  useComposerQuickPickAgents,
+} from "./ComposerAgentQuickPicks";
 import { ComposerReplyEditBanner } from "./ComposerReplyEditBanner";
 import { ComposerAttachments, DropZoneOverlay } from "./ComposerAttachments";
 import { focusMentionOptionsTrigger } from "./MentionAutocomplete";
@@ -456,6 +460,7 @@ function MessageComposerImpl({
     selectMentionSuggestion,
     syncAddressedAgentsFromText,
     toggleAlwaysAddressAgent,
+    addressAgent,
   } = useAgentAddressLockPicker({
     applyAutocompleteEdit,
     audience: persistentAudience,
@@ -818,6 +823,8 @@ function MessageComposerImpl({
     if (!voiceNote.hasAttachmentRef.current) void media.handlePaperclip();
   }, [media.handlePaperclip, voiceNote.hasAttachmentRef]);
   const acceptsDrop = ownsDropZone && voiceNote.acceptsAttachment;
+  const quickPicksEnabled = editTarget == null;
+  const quickPickAgents = useComposerQuickPickAgents(quickPicksEnabled);
   return (
     <>
       <footer
@@ -839,6 +846,19 @@ function MessageComposerImpl({
             onCancelEdit={onCancelEdit}
             onCancelReply={onCancelReply}
           />
+          {quickPicksEnabled ? (
+            <ComposerAgentQuickPicks
+              activePubkeys={lockedAgentPubkeys}
+              agents={quickPickAgents}
+              disabled={composerDisabled}
+              onUse={(agent) => {
+                addressAgent(agent);
+                // After the activating key event: an Enter that pressed the
+                // button must not also reach the editor and send the draft.
+                requestAnimationFrame(() => richText.focus());
+              }}
+            />
+          ) : null}
           {showBackgroundUploadProgress ? (
             <ComposerUploadProgressPill
               canCancel={backgroundUpload.canCancel}

@@ -337,6 +337,65 @@ test("automatically mentions multiple agents from the mention picker", async ({
   ).toBeVisible();
 });
 
+test("quick picks above the composer use an agent without typing @", async ({
+  page,
+}) => {
+  await installAudienceFixtures(page);
+  await openGeneral(page);
+
+  // Channel composer: a one-time mention at the start of the draft.
+  const composer = channelComposer(page);
+  const input = composer.getByTestId("message-input");
+  const picks = composer.getByTestId("composer-agent-quick-picks");
+  await expect(picks.getByRole("button")).toHaveText(["Morgarita", "Vogue"]);
+  const morgarita = picks.getByRole("button", { name: "Use Morgarita" });
+  await morgarita.hover();
+  await expect(page.getByRole("tooltip")).toHaveText("Use Morgarita");
+  await morgarita.click();
+  await expect(input).toHaveText("@Morgarita");
+  await input.press("End");
+  await input.type("hello");
+  await input.press("Enter");
+  await expect
+    .poll(() => readOutgoingMentionPubkeys(page, "@Morgarita hello"))
+    .toContain(AGENT_A);
+  await expect(input).toHaveText("");
+
+  // Using an agent the draft already mentions adds nothing.
+  const vogue = picks.getByRole("button", { name: "Use Vogue" });
+  await vogue.click();
+  await vogue.click();
+  await expect(input).toHaveText("@Vogue");
+
+  // Keyboard reaches and operates the same action.
+  await morgarita.focus();
+  await page.keyboard.press("Enter");
+  await expect(input).toHaveText("@Morgarita @Vogue");
+  await input.press("ControlOrMeta+a");
+  await input.press("Backspace");
+  await vogue.focus();
+  await page.keyboard.press("Space");
+  await expect(input).toHaveText("@Vogue");
+
+  // Thread composer: the agent stays pinned for the thread's next messages.
+  await openThread(page);
+  const thread = threadComposer(page);
+  const threadMorgarita = thread
+    .getByTestId("composer-agent-quick-picks")
+    .getByRole("button", { name: "Use Morgarita" });
+  await threadMorgarita.click();
+  await expect(
+    thread.getByTestId(`composer-address-lock-${AGENT_A}`),
+  ).toBeVisible();
+  await expect(thread.getByTestId("message-input")).toHaveText("@Morgarita");
+  // Using a pinned agent again keeps it pinned without a second mention.
+  await threadMorgarita.click();
+  await expect(thread.getByTestId("message-input")).toHaveText("@Morgarita");
+  await expect(
+    thread.getByTestId(`composer-address-lock-${AGENT_A}`),
+  ).toBeVisible();
+});
+
 test("keeps the composer and global automatic mention settings synchronized", async ({
   page,
 }) => {
