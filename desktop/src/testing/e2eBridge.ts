@@ -11223,9 +11223,14 @@ function sendToMockSocket(args: {
     // Project queries: NIP-34 kinds, or kind:1 comments scoped by repo `a`
     // tag or by issue/PR root `e` tag (discussions, approvals, review
     // requests, assignment operations). Channel messages are kind 9, so a
-    // kind:1 `#e` query can only target project discussion events.
+    // kind:1 `#e` query can only target project discussion events. A kind:5
+    // query is a project query only when it addresses coordinates (`#a`);
+    // message deletions are looked up by `#e` in the channel store.
     if (
-      filter.kinds?.some((kind) => MOCK_PROJECT_KINDS.has(kind)) ||
+      filter.kinds?.some(
+        (kind) => kind !== KIND_DELETION && MOCK_PROJECT_KINDS.has(kind),
+      ) ||
+      (filter.kinds?.includes(KIND_DELETION) && filter["#a"]) ||
       (filter.kinds?.includes(1) && (filter["#a"] || filter["#e"]))
     ) {
       window.__BUZZ_E2E_PROJECT_QUERY_FILTERS__ ??= [];
