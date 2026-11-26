@@ -210,6 +210,10 @@ pub struct AcpClient {
     /// `protocolVersion` the agent answered `initialize` with (1 until then).
     /// ACP v2 changed some request shapes, e.g. the tagged config value.
     protocol_version: u64,
+    /// The agent advertised `capabilities.session.systemPrompt` (final ACP
+    /// v2): a system prompt goes as `{mode: "append", content: [...]}` rather
+    /// than the bare string Buzz's own agents read.
+    standard_system_prompt: bool,
     /// Per-turn channel for receiving goose-native non-cancelling steer
     /// requests from the main loop. Installed by
     /// [`install_steer_rx`](Self::install_steer_rx) at dispatch and
@@ -633,6 +637,7 @@ impl AcpClient {
             active_run_id: None,
             steering_supported: false,
             protocol_version: 1,
+            standard_system_prompt: false,
             steer_rx: None,
             goose_usage: UsageTracker::default(),
             standard_usage: StandardUsageTracker::default(),
@@ -697,6 +702,9 @@ impl AcpClient {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         self.protocol_version = result["protocolVersion"].as_u64().unwrap_or(1);
+        self.standard_system_prompt = result
+            .pointer("/capabilities/session/systemPrompt")
+            .is_some_and(serde_json::Value::is_object);
         tracing::debug!(target: "acp::init", "initialize response: {result}");
         Ok(result)
     }
@@ -743,6 +751,12 @@ impl AcpClient {
             "mcpServers": mcp_servers,
         });
         match system_prompt {
+            Some(SystemPromptTransport::Field(sp)) if self.standard_system_prompt => {
+                params["systemPrompt"] = serde_json::json!({
+                    "mode": "append",
+                    "content": [{ "type": "text", "text": sp }],
+                });
+            }
             Some(SystemPromptTransport::Field(sp)) => {
                 params["systemPrompt"] = serde_json::Value::String(sp.to_owned());
             }
@@ -1810,7 +1824,7 @@ impl AcpClient {
                                                 crate::pool::SteerAck::PromptCompletedNeutral,
                                             );
                                         }
-                                        return Ok(result);
+                                        return result;
                                     }
                                 }
                             }
@@ -2160,7 +2174,13 @@ fn is_v2_prompt_ack(result: &serde_json::Value) -> bool {
 
 /// The prompt result for an ACP v2 turn: its session's `state_update` with
 /// `state: "idle"` carries the `stopReason` (and the turn's `usage`).
-fn v2_turn_end(msg: &serde_json::Value, session_id: &str) -> Option<serde_json::Value> {
+///
+/// A turn that ended in `stopReason: "error"` (e.g. codex-acp when its model
+/// provider fails) becomes the agent's own error, not an unknown stop reason.
+fn v2_turn_end(
+    msg: &serde_json::Value,
+    session_id: &str,
+) -> Option<Result<serde_json::Value, AcpError>> {
     let params = &msg["params"];
     if params
         .get("sessionId")
@@ -2174,11 +2194,18 @@ fn v2_turn_end(msg: &serde_json::Value, session_id: &str) -> Option<serde_json::
         return None;
     }
     let stop_reason = update.get("stopReason")?.clone();
+    if stop_reason == "error" {
+        let error = update
+            .get("error")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({ "message": "agent turn failed" }));
+        return Some(Err(agent_error_from_json(&error)));
+    }
     let mut result = serde_json::json!({ "stopReason": stop_reason });
     if let Some(usage) = update.get("usage") {
         result["usage"] = usage.clone();
     }
-    Some(result)
+    Some(Ok(result))
 }
 
 /// Build `session/prompt` params from one or more text content blocks.
@@ -2280,7 +2307,9 @@ pub struct SessionNewResponse {
 ///   while keeping its tool-use preset intact.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SystemPromptTransport<'a> {
-    /// Deliver as a bare top-level `systemPrompt` field.
+    /// Deliver as the top-level `systemPrompt`: the final ACP v2 object
+    /// (`{mode: "append", content}`) when the agent advertises
+    /// `capabilities.session.systemPrompt`, otherwise a bare string.
     Field(&'a str),
     /// Deliver as `_meta.systemPrompt: text`.
     PiMeta(&'a str),
@@ -4933,6 +4962,17 @@ sleep 1"#,
         assert!(!is_v2_prompt_ack(
             &serde_json::json!({"stopReason": "end_turn"})
         ));
+        // codex-acp ends a failed turn with `stopReason: "error"` and the cause.
+        let failed = serde_json::json!({"params": {"sessionId": "s", "update": {
+            "sessionUpdate": "state_update", "state": "idle", "stopReason": "error",
+            "error": {"code": -32603, "message": "No OpenRouter credential is saved"}}}});
+        match v2_turn_end(&failed, "s") {
+            Some(Err(AcpError::AgentError { code, message })) => {
+                assert_eq!(code, -32603);
+                assert_eq!(message, "No OpenRouter credential is saved");
+            }
+            other => panic!("expected the agent's own error, got {other:?}"),
+        }
     }
 
     #[tokio::test]

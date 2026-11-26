@@ -204,6 +204,56 @@ while read -r REQ; do
 done
 "#;
 
+    /// codex-acp 2.12 (final ACP v2): advertises `session.systemPrompt`,
+    /// rejects a bare-string system prompt and accepts the append object.
+    const FAKE_CODEX_V2: &str = r#"
+while read -r REQ; do
+  ID=$(printf '%s' "$REQ" | sed -E 's/.*"id":([0-9]+).*/\1/')
+  case "$REQ" in
+    *'"method":"initialize"'*)
+      echo '{"jsonrpc":"2.0","id":'"$ID"',"result":{"protocolVersion":2,"info":{"name":"@agentclientprotocol/codex-acp","version":"2.12.1"},"capabilities":{"session":{"systemPrompt":{}}}}}' ;;
+    *'"method":"session/new"'*)
+      if printf '%s' "$REQ" | grep -q '"systemPrompt":{"content":\[{"text"'; then
+        echo '{"jsonrpc":"2.0","id":'"$ID"',"result":{"sessionId":"codex-session"}}'
+      else
+        echo '{"jsonrpc":"2.0","id":'"$ID"',"error":{"code":-32602,"message":"Invalid params"}}'
+      fi ;;
+    *'"method":"session/prompt"'*)
+      echo '{"jsonrpc":"2.0","id":'"$ID"',"result":{"messageId":"m-1"}}'
+      echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"codex-session","update":{"sessionUpdate":"state_update","state":"idle","stopReason":"end_turn"}}}' ;;
+  esac
+done
+"#;
+
+    async fn probe_fake(name: &str, script: &str, extra: &[&str]) -> ProbeReport {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("buzz-acp-probe-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("create probe dir");
+        let path = dir.join(name);
+        std::fs::write(&path, format!("#!/usr/bin/env bash\n{script}\n")).expect("write fake");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod fake");
+        let command = path.to_str().expect("utf8 path").to_string();
+        let mut argv = vec!["buzz-acp", "--agent-command", &command];
+        argv.extend_from_slice(extra);
+        let args = ProbeTurnArgs::parse_from(argv);
+        let mut client = AcpClient::spawn(&command, &[], &[], false)
+            .await
+            .expect("spawn fake adapter");
+        let outcome = probe(&mut client, &args, "/", Duration::from_secs(5)).await;
+        client.shutdown().await;
+        let _ = std::fs::remove_dir_all(&dir);
+        outcome.unwrap_or_else(|f| panic!("{}: {}", f.stage, f.message))
+    }
+
+    #[tokio::test]
+    async fn probe_completes_a_final_v2_codex_turn() {
+        let report = probe_fake("codex-acp", FAKE_CODEX_V2, &[]).await;
+        assert_eq!(report.agent_name, "@agentclientprotocol/codex-acp");
+        assert_eq!(report.stop_reason, StopReason::EndTurn);
+    }
+
     #[tokio::test]
     async fn probe_completes_a_v2_claude_turn() {
         use std::os::unix::fs::PermissionsExt;
