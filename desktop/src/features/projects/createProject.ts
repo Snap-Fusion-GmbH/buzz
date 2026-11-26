@@ -299,7 +299,10 @@ export async function createProject(
   );
   const projectId = `${ownerPubkey}:${dtagPreview}`;
   const canResume = resume.projectIds.has(projectId);
-  if (existingProject && !canResume) {
+  // A repository-only leftover (its project was deleted) is not a project:
+  // creating the project again must rebuild the project and its channel
+  // around that repository instead of returning it as if nothing were missing.
+  if (existingProject && !existingProject.legacy && !canResume) {
     if (
       githubCloneUrl &&
       existingProject.repositories.some((repository) =>

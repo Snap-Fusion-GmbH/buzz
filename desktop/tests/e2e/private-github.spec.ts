@@ -14,6 +14,10 @@ async function openImport(page: Page) {
   await installMockBridge(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await page.getByTestId("sidebar-projects-create").click();
+  // Same-named projects are told apart by their owner and short npub.
+  await expect(page.getByTestId("project-browser-owner-buzz")).toContainText(
+    /npub1/,
+  );
   await page.getByTestId("project-browser-github").click();
   await expect(page.getByTestId("github-import-dialog")).toBeVisible();
 }
@@ -162,6 +166,29 @@ test("private GitHub import requires consent, recovers access errors and appears
     .toMatch(
       /Clone URL: .*github\.com.*Local checkout: .*REPOS\/private-demo/s,
     );
+
+  // Deleting the project leaves its repository behind. Importing the same
+  // GitHub repository again must rebuild the project and its channel around
+  // that repository, not silently stop at the leftover.
+  await page.getByTestId("sidebar-project-private-demo").hover();
+  await page.getByTestId("sidebar-project-delete-private-demo").click();
+  await page
+    .getByTestId("sidebar-project-delete-confirm-button-private-demo")
+    .click();
+  await expect(page.getByText("Project deleted")).toBeVisible({
+    timeout: 20_000,
+  });
+  await page.getByTestId("sidebar-projects-create").click();
+  await page.getByTestId("project-browser-github").click();
+  await page.getByTestId("github-import-repository").selectOption("6001");
+  await page
+    .getByLabel(
+      "Share this repository's name and link with this Buzz workspace",
+    )
+    .check();
+  await page.getByTestId("github-import-submit").click();
+  await expect(page.getByTestId("github-import-dialog")).not.toBeVisible();
+  await expect(page.getByTestId("sidebar-project-private-demo")).toBeVisible();
 });
 
 test("GitHub repository listing failures stay recoverable instead of looking empty", async ({

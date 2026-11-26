@@ -6562,8 +6562,16 @@ function isMockProjectScopedEvent(event: RelayEvent): boolean {
   const hasRepoAddressTag = event.tags.some(
     (tag) => tag[0] === "a" && (tag[1] ?? "").startsWith("30617:"),
   );
+  // Like the relay, a project's owner may tombstone the project itself.
+  const deletesProject =
+    event.kind === KIND_DELETION &&
+    event.tags.some(
+      (tag) => tag[0] === "a" && (tag[1] ?? "").startsWith("30621:"),
+    );
   return (
-    (event.kind === KIND_REPO_ANNOUNCEMENT || hasRepoAddressTag) &&
+    (event.kind === KIND_REPO_ANNOUNCEMENT ||
+      hasRepoAddressTag ||
+      deletesProject) &&
     (event.kind === 1 || MOCK_PROJECT_KINDS.has(event.kind))
   );
 }
