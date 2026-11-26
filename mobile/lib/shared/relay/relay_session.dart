@@ -19,6 +19,7 @@ import '../hosted/hosted_relay_auth.dart';
 import '../hosted/builderlab_account.dart';
 import 'nostr_filters.dart';
 import 'nostr_models.dart';
+import 'relay_call_error.dart';
 import 'relay_client.dart';
 import 'relay_closed_policy.dart';
 import 'relay_http_query_client.dart';
@@ -297,7 +298,7 @@ class RelaySessionNotifier extends Notifier<SessionState> {
         response.headers['content-type'],
       );
       _activateRateLimitGateFromHttpError(body);
-      throw RelayException(response.statusCode, body);
+      throw RelayQueryException(response.statusCode, body);
     }
     // Decoding runs off the UI isolate, so the session can retire meanwhile.
     // A retired session reports that, not whatever its bytes decoded to.
@@ -327,6 +328,7 @@ class RelaySessionNotifier extends Notifier<SessionState> {
     NostrFilter filter, {
     Duration timeout = const Duration(seconds: 8),
   }) async {
+    final callSite = StackTrace.current;
     final generation = _contextGeneration;
     if (_rateLimitGate.isActive) await _rateLimitGate.wait();
     if (_disposed || generation != _contextGeneration) {
@@ -334,7 +336,6 @@ class RelaySessionNotifier extends Notifier<SessionState> {
     }
     final subId = _nextSubId('h');
     final completer = Completer<List<NostrEvent>>();
-
     final timer = Timer(timeout, () {
       final sub = _historySubscriptions.remove(subId);
       if (sub != null && !sub.completer.isCompleted) {
@@ -343,9 +344,7 @@ class RelaySessionNotifier extends Notifier<SessionState> {
           failure: NetworkFailure.timeout,
           since: sub.startedAt,
         );
-        sub.completer.completeError(
-          TimeoutException('Relay history request timed out after $timeout'),
-        );
+        sub.timedOut(timeout);
       }
       if (sub?.heldFilter == null) _sendClose(subId);
     });
@@ -354,6 +353,7 @@ class RelaySessionNotifier extends Notifier<SessionState> {
       completer: completer,
       timeout: timer,
       startedAt: _now(),
+      callSite: callSite,
     );
     _historySubscriptions[subId] = subscription;
 
@@ -459,6 +459,7 @@ class RelaySessionNotifier extends Notifier<SessionState> {
     Duration timeout = const Duration(seconds: 8),
     Future<bool> Function()? mayPublish,
   }) async {
+    final callSite = StackTrace.current;
     final generation = _connectionGeneration;
     if (_rateLimitGate.isActive) await _rateLimitGate.wait();
     bool connected() => _isActiveConnection(generation) && _socketConnected;
@@ -466,7 +467,6 @@ class RelaySessionNotifier extends Notifier<SessionState> {
     if ((mayPublish != null && !await mayPublish()) || !connected()) {
       throw StateError('Event no longer wanted');
     }
-
     final completer = Completer<NostrEvent>();
     final timer = Timer(timeout, () {
       final pending = _pendingEvents.remove(event.id);
@@ -476,11 +476,7 @@ class RelaySessionNotifier extends Notifier<SessionState> {
           failure: NetworkFailure.timeout,
           since: pending.startedAt,
         );
-        pending.completer.completeError(
-          RelayAckTimeoutError(
-            'Event ${event.id} not acknowledged within $timeout',
-          ),
-        );
+        pending.timedOut(event.id, timeout);
       }
     });
 
@@ -488,6 +484,7 @@ class RelaySessionNotifier extends Notifier<SessionState> {
       completer: completer,
       timeout: timer,
       startedAt: _now(),
+      callSite: callSite,
     );
 
     _socket?.send(['EVENT', event.toJson()]);
@@ -922,7 +919,7 @@ class RelaySessionNotifier extends Notifier<SessionState> {
           failure: _relayMessageFailure(message),
           since: historySub.startedAt,
         );
-        historySub.completer.completeError(Exception(message));
+        historySub.fail(RelayClosedException(RelayCall.history, message));
       }
       return;
     }
@@ -943,7 +940,10 @@ class RelaySessionNotifier extends Notifier<SessionState> {
     if (closedClass == RelayClosedClass.terminal &&
         !isRelayDeadlineError(message)) {
       if (readyCompleter != null && !readyCompleter.isCompleted) {
-        readyCompleter.completeError(Exception(message));
+        readyCompleter.completeErrorAt(
+          RelayClosedException(RelayCall.subscribe, message),
+          liveSub.callSite,
+        );
       }
       liveSub.onClosed?.call(message);
       _removeLiveSubscription(subId, liveSub);
@@ -1066,7 +1066,7 @@ class RelaySessionNotifier extends Notifier<SessionState> {
         _rateLimitGate.activate(parseRateLimitRetrySeconds(message));
       }
       if (!pending.completer.isCompleted) {
-        pending.completer.completeError(
+        pending.fail(
           RelayEventRejectedException(
             message.isNotEmpty ? message : 'Event rejected',
           ),
@@ -1148,7 +1148,7 @@ class RelaySessionNotifier extends Notifier<SessionState> {
     for (final entry in _historySubscriptions.values) {
       entry.timeout.cancel();
       if (!entry.completer.isCompleted) {
-        entry.completer.completeError(error ?? Exception('Connection lost'));
+        entry.fail(error ?? Exception('Connection lost'));
       }
     }
     _historySubscriptions.clear();
@@ -1158,7 +1158,7 @@ class RelaySessionNotifier extends Notifier<SessionState> {
     for (final entry in _pendingEvents.values) {
       entry.timeout.cancel();
       if (!entry.completer.isCompleted) {
-        entry.completer.completeError(RelayAckLostError(error));
+        entry.fail(RelayAckLostError(error));
       }
     }
     _pendingEvents.clear();

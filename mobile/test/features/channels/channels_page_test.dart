@@ -1,9 +1,7 @@
 import 'package:buzz/shared/widgets/ios_glass_navigation_button.dart';
-import 'package:buzz/features/channels/channels_page/filters.dart';
 import 'package:buzz/features/channels/channel_sections/section_show_more.dart';
 import 'package:buzz/shared/widgets/app_list.dart';
 import 'package:buzz/shared/widgets/adaptive_conversation_pane.dart';
-import 'package:buzz/features/channels/channel_filter/channel_filter_activity.dart';
 import 'package:buzz/features/channels/channel_filter/channel_filter_provider.dart';
 import 'package:buzz/features/channels/channel_filter/channel_filter_manager.dart';
 import 'package:buzz/features/channels/channel_filter/channel_filter_store.dart';
@@ -3917,7 +3915,8 @@ void main() {
         'description': '',
         'ttl': null,
       });
-      expect(find.text('Bad state: Try again'), findsOneWidget);
+      // A StateError shows its message, not Dart's `Bad state: ` wrapper.
+      expect(find.text('Try again'), findsOneWidget);
       expectSingleFieldLabels();
 
       final nameField = tester.widget<TextField>(
@@ -3982,48 +3981,57 @@ void main() {
     },
   );
 
-  testWidgets('create channel sheet shows a taken-name refusal as plain text', (
-    tester,
-  ) async {
-    await tester.pumpWidget(
-      buildTestable(
-        overrides: [
-          channelsProvider.overrideWith(() => _FakeNotifier(testChannels)),
-          // Same shape relay_session completes a refused publish with.
-          channelActionsProvider.overrideWith(
-            (ref) => _RefusingCreateActions(
-              Exception(
-                'invalid: an open channel named "Launch" already exists',
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-    await tester.pumpAndSettle();
+  testWidgets(
+    'create channel sheet shows refusals and lost connections as plain text',
+    (tester) async {
+      // Same shape relay_session completes a refused publish with.
+      final actions = _RefusingCreateActions(
+        Exception('invalid: an open channel named "Launch" already exists'),
+      );
+      await tester.pumpWidget(
+        buildTestable(
+          overrides: [
+            channelsProvider.overrideWith(() => _FakeNotifier(testChannels)),
+            channelActionsProvider.overrideWith((ref) => actions),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('Create'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('New channel'));
-    await tester.pumpAndSettle();
-    await tester.enterText(
-      find.byKey(const Key('create-channel-name')),
-      'Launch',
-    );
-    await tester.pump();
-    // The sheet submits from the keyboard's done action.
-    await tester.testTextInput.receiveAction(TextInputAction.done);
-    await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Create'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('New channel'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('create-channel-name')),
+        'Launch',
+      );
+      await tester.pump();
+      // The sheet submits from the keyboard's done action.
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
 
-    expect(
-      find.text('An open channel named "Launch" already exists'),
-      findsOneWidget,
-    );
-    expect(find.textContaining('Exception'), findsNothing);
-    expect(find.textContaining('invalid:'), findsNothing);
-    // The sheet stays open so the user can pick another name.
-    expect(find.text('New channel'), findsOneWidget);
-  });
+      expect(
+        find.text('An open channel named "Launch" already exists'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Exception'), findsNothing);
+      expect(find.textContaining('invalid:'), findsNothing);
+      // The sheet stays open so the user can pick another name.
+      expect(find.text('New channel'), findsOneWidget);
+
+      // Retrying after the connection drops replaces the refusal.
+      actions.error = RelayNotConnectedError();
+      await tester.tap(find.byKey(const Key('create-channel-submit')));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Couldn’t create channel. No connection.'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('already exists'), findsNothing);
+      expect(find.textContaining('Bad state'), findsNothing);
+    },
+  );
 
   dmRecipientLayoutTests(
     (overrides) => buildTestable(
@@ -5408,7 +5416,7 @@ class _CreateSheetActions implements ChannelActions {
 class _RefusingCreateActions implements ChannelActions {
   _RefusingCreateActions(this.error);
 
-  final Object error;
+  Object error;
 
   @override
   Future<Channel> createChannel({
