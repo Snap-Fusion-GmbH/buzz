@@ -6251,19 +6251,17 @@ async fn spawn_auth_client(agent: &AuthAgentArgs) -> Result<AcpClient, acp::AcpE
 }
 
 /// The adapter's advertised auth methods, each with an `id`. ACP v2 adapters
-/// (codex-acp 2.12) name it `methodId`; it is copied to `id` so callers and
-/// the `--json` output keep one shape.
+/// (codex-acp 2.12) name it `methodId`; it is renamed to `id` so callers and
+/// the `--json` output keep one shape (never both fields).
 fn extract_auth_methods(init_result: &serde_json::Value) -> Vec<serde_json::Value> {
     let mut methods = init_result
         .get("authMethods")
         .and_then(|methods| methods.as_array())
         .cloned()
         .unwrap_or_default();
-    for method in &mut methods {
-        if method.get("id").is_none() {
-            if let Some(id) = method.get("methodId").cloned() {
-                method["id"] = id;
-            }
+    for method in methods.iter_mut().filter_map(|m| m.as_object_mut()) {
+        if let Some(method_id) = method.remove("methodId") {
+            method.entry("id").or_insert(method_id);
         }
     }
     methods
@@ -10797,7 +10795,8 @@ mod error_outcome_emission_tests {
             {"methodId": "chat-gpt", "name": "ChatGPT", "type": "agent"},
             {"id": "claude-login", "name": "Claude"},
         ]});
-        let ids: Vec<_> = extract_auth_methods(&init)
+        let methods = extract_auth_methods(&init);
+        let ids: Vec<_> = methods
             .iter()
             .map(|method| method["id"].as_str().map(str::to_string))
             .collect();
@@ -10808,6 +10807,10 @@ mod error_outcome_emission_tests {
                 Some("claude-login".to_string())
             ]
         );
+        // Desktop parses this output; both fields at once would be ambiguous.
+        assert!(methods
+            .iter()
+            .all(|method| method.get("methodId").is_none()));
     }
 
     #[test]

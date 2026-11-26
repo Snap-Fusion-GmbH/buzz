@@ -15,10 +15,8 @@ use crate::managed_agents::{
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", try_from = "RawAcpAuthMethod")]
 pub struct AcpAuthMethod {
-    /// ACP v2 adapters name it `methodId`.
-    #[serde(alias = "methodId")]
     pub id: String,
     pub name: String,
     pub description: Option<String>,
@@ -32,6 +30,44 @@ pub struct AcpAuthMethod {
     pub command: Vec<String>,
     #[serde(default, rename = "_meta")]
     pub meta: Option<Value>,
+}
+
+/// The wire shape: ACP v2 adapters name the id `methodId`, v1 adapters `id`,
+/// and a sidecar may send both. `id` wins.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawAcpAuthMethod {
+    id: Option<String>,
+    method_id: Option<String>,
+    name: String,
+    description: Option<String>,
+    #[serde(rename = "type")]
+    method_type: Option<String>,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    command: Vec<String>,
+    #[serde(default, rename = "_meta")]
+    meta: Option<Value>,
+}
+
+impl TryFrom<RawAcpAuthMethod> for AcpAuthMethod {
+    type Error = String;
+
+    fn try_from(raw: RawAcpAuthMethod) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: raw
+                .id
+                .or(raw.method_id)
+                .ok_or_else(|| format!("auth method {:?} has no id", raw.name))?,
+            name: raw.name,
+            description: raw.description,
+            method_type: raw.method_type,
+            args: raw.args,
+            command: raw.command,
+            meta: raw.meta,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -544,12 +580,23 @@ mod tests {
     };
 
     #[test]
-    fn auth_methods_parse_the_v2_method_id() {
-        let method: AcpAuthMethod = serde_json::from_str(
-            r#"{"methodId":"chat-gpt","name":"ChatGPT","description":null,"type":"agent"}"#,
-        )
-        .expect("ACP v2 auth method");
-        assert_eq!(method.id, "chat-gpt");
+    fn auth_methods_parse_v1_v2_and_mixed_ids() {
+        // v1 `id`, v2 `methodId`, and both at once (an older or newer sidecar).
+        for (json, expected) in [
+            (r#"{"id":"login","name":"Login"}"#, "login"),
+            (
+                r#"{"methodId":"chat-gpt","name":"ChatGPT","type":"agent"}"#,
+                "chat-gpt",
+            ),
+            (
+                r#"{"id":"chat-gpt","methodId":"chat-gpt","name":"ChatGPT"}"#,
+                "chat-gpt",
+            ),
+        ] {
+            let method: AcpAuthMethod = serde_json::from_str(json).expect(json);
+            assert_eq!(method.id, expected);
+        }
+        assert!(serde_json::from_str::<AcpAuthMethod>(r#"{"name":"No id"}"#).is_err());
     }
 
     #[test]
