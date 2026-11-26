@@ -196,3 +196,120 @@ test("Debian updates respect the install layout and retry denied installation wi
     globalThis.__TAURI_INTERNALS__ = originalGlobalInternals;
   }
 });
+
+test("a downloaded macOS update relaunches itself only while the user is away and not in a huddle", async () => {
+  const calls = [];
+  const intervals = new Map();
+  let intervalId = 0;
+  let now = 1_000_000;
+  let focused = true;
+  let huddle = { phase: "connected" };
+  const originals = {
+    setInterval: window.setInterval,
+    clearInterval: window.clearInterval,
+    now: Date.now,
+    hasFocus: document.hasFocus,
+    platform: Object.getOwnPropertyDescriptor(navigator, "platform"),
+    internals: window.__TAURI_INTERNALS__,
+    globalInternals: globalThis.__TAURI_INTERNALS__,
+  };
+  window.setInterval = (callback, delay) => {
+    const identifier = ++intervalId;
+    intervals.set(identifier, { callback, delay });
+    return identifier;
+  };
+  window.clearInterval = (identifier) => intervals.delete(identifier);
+  Date.now = () => now;
+  document.hasFocus = () => focused;
+  Object.defineProperty(navigator, "platform", {
+    configurable: true,
+    get: () => "MacIntel",
+  });
+  const internals = {
+    transformCallback: () => 1,
+    invoke: async (command) => {
+      calls.push(command);
+      switch (command) {
+        case "plugin:updater|check":
+          return { rid: 1, currentVersion: "0.6.0", version: "0.6.1" };
+        case "is_auto_update_supported":
+          return true;
+        case "plugin:updater|download":
+          return 2;
+        case "get_huddle_state":
+          if (huddle === "unreadable") throw new Error("no huddle backend");
+          return huddle;
+        case "plugin:updater|install":
+        case "plugin:process|restart":
+        case "plugin:resources|close":
+          return;
+        default:
+          throw new Error(`Unexpected native call: ${command}`);
+      }
+    },
+  };
+  window.__TAURI_INTERNALS__ = internals;
+  globalThis.__TAURI_INTERNALS__ = internals;
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  function Harness() {
+    return React.createElement("span", null, useUpdater().status.state);
+  }
+  const relaunched = () => calls.includes("plugin:process|restart");
+  try {
+    await act(async () => root.render(React.createElement(Harness)));
+    assert.equal(container.textContent, "ready");
+    const poll = [...intervals.values()].find(
+      (timer) => timer.delay === 30 * 1000,
+    );
+    assert.ok(poll, "a ready macOS update watches for idleness");
+    const tick = async (minutes) => {
+      now += minutes * 60 * 1000;
+      await act(async () => poll.callback());
+    };
+
+    // Active user: nothing happens.
+    await tick(1);
+    assert.equal(relaunched(), false);
+    // Idle but the window is focused: still waits.
+    await tick(5);
+    assert.equal(relaunched(), false);
+    // Away from the window, but in a huddle: never cuts the call.
+    focused = false;
+    await tick(1);
+    assert.equal(calls.includes("get_huddle_state"), true);
+    assert.equal(relaunched(), false);
+    // An unreadable huddle state counts as live.
+    huddle = "unreadable";
+    await tick(1);
+    assert.equal(relaunched(), false);
+    // Fresh input resets the idle clock.
+    huddle = { phase: "idle" };
+    await act(async () =>
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "a" })),
+    );
+    await tick(1);
+    assert.equal(relaunched(), false);
+    // Away, idle and no huddle: installs and relaunches silently.
+    await tick(5);
+    assert.deepEqual(calls.slice(-2), [
+      "plugin:updater|install",
+      "plugin:process|restart",
+    ]);
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+    window.setInterval = originals.setInterval;
+    window.clearInterval = originals.clearInterval;
+    Date.now = originals.now;
+    document.hasFocus = originals.hasFocus;
+    if (originals.platform) {
+      Object.defineProperty(navigator, "platform", originals.platform);
+    } else {
+      delete navigator.platform;
+    }
+    window.__TAURI_INTERNALS__ = originals.internals;
+    globalThis.__TAURI_INTERNALS__ = originals.globalInternals;
+  }
+});

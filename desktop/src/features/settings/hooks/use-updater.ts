@@ -1,8 +1,10 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { invoke } from "@tauri-apps/api/core";
 import { isAutoUpdateSupported } from "@/shared/api/tauri";
 import updaterPolicy from "@/shared/config/updater-policy.json";
+import { isMacPlatform } from "@/shared/lib/platform";
 
 export type UpdateStatus =
   | { state: "idle" }
@@ -33,6 +35,25 @@ const BACKGROUND_BLOCKED_STATES = new Set<UpdateStatus["state"]>([
 ]);
 
 const GITHUB_RELEASES_URL = "https://github.com/block/buzz/releases/latest";
+
+/**
+ * A downloaded macOS update installs and relaunches by itself once the user
+ * has left the app alone this long. Linux packages need an administrator
+ * prompt, so they keep the explicit "Ready to update" action.
+ */
+export const SILENT_RELAUNCH_IDLE_MS = 5 * 60 * 1000;
+export const SILENT_RELAUNCH_POLL_MS = 30 * 1000;
+const USER_INPUT_EVENTS = ["keydown", "pointerdown", "pointermove", "wheel"];
+
+/** Never relaunch under a live huddle; an unknown huddle state counts as live. */
+async function huddleIsIdle(): Promise<boolean> {
+  try {
+    const state = await invoke<{ phase?: string }>("get_huddle_state");
+    return state?.phase === "idle";
+  } catch {
+    return false;
+  }
+}
 
 function manualDownloadUrl(update: Update): string {
   const platforms = update.rawJson?.platforms;
@@ -225,6 +246,42 @@ export function useUpdater() {
   const checkForUpdateInBackground = useCallback(async () => {
     await runUpdateCheck({ background: true });
   }, [runUpdateCheck]);
+
+  // Silent macOS update: once downloaded, install and relaunch while the user
+  // is away (idle, window unfocused) and not in a huddle. Drafts persist.
+  const silentReady = status.state === "ready" && isMacPlatform();
+  useEffect(() => {
+    if (!silentReady) return;
+    let lastInput = Date.now();
+    const markInput = () => {
+      lastInput = Date.now();
+    };
+    for (const name of USER_INPUT_EVENTS) {
+      window.addEventListener(name, markInput, { passive: true });
+    }
+    let attempting = false;
+    const intervalId = window.setInterval(() => {
+      if (
+        attempting ||
+        Date.now() - lastInput < SILENT_RELAUNCH_IDLE_MS ||
+        document.hasFocus()
+      ) {
+        return;
+      }
+      attempting = true;
+      void huddleIsIdle()
+        .then((idle) => (idle ? installAndRelaunch() : undefined))
+        .finally(() => {
+          attempting = false;
+        });
+    }, SILENT_RELAUNCH_POLL_MS);
+    return () => {
+      window.clearInterval(intervalId);
+      for (const name of USER_INPUT_EVENTS) {
+        window.removeEventListener(name, markInput);
+      }
+    };
+  }, [installAndRelaunch, silentReady]);
 
   useEffect(() => {
     void checkForUpdateInBackground();
