@@ -238,9 +238,7 @@ done
         let mut argv = vec!["buzz-acp", "--agent-command", &command];
         argv.extend_from_slice(extra);
         let args = ProbeTurnArgs::parse_from(argv);
-        let mut client = AcpClient::spawn(&command, &[], &[], false)
-            .await
-            .expect("spawn fake adapter");
+        let mut client = crate::acp::tests::spawn_fake_adapter(&command).await;
         let outcome = probe(&mut client, &args, "/", Duration::from_secs(5)).await;
         client.shutdown().await;
         let _ = std::fs::remove_dir_all(&dir);
@@ -273,9 +271,7 @@ done
             "--model",
             "sonnet",
         ]);
-        let mut client = AcpClient::spawn(&command, &[], &[], false)
-            .await
-            .expect("spawn fake adapter");
+        let mut client = crate::acp::tests::spawn_fake_adapter(&command).await;
 
         let outcome = probe(&mut client, &args, "/", Duration::from_secs(5)).await;
         client.shutdown().await;

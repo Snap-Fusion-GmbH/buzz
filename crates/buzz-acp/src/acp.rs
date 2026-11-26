@@ -2614,7 +2614,7 @@ fn configure_no_window(cmd: &mut tokio::process::Command) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -3331,10 +3331,33 @@ mod tests {
             .permissions();
         permissions.set_mode(0o755);
         std::fs::set_permissions(&path, permissions).expect("chmod fake adapter");
-        let client = AcpClient::spawn(path.to_str().expect("utf8 path"), &[], &[], false)
-            .await
-            .expect("spawn named fake adapter");
+        let client = spawn_fake_adapter(path.to_str().expect("utf8 path")).await;
         (client, dir)
+    }
+
+    /// Spawn a just-written fake adapter. Another test thread forking while
+    /// this one wrote the script can hold its write handle for a moment, so
+    /// exec briefly fails with ETXTBSY ("Text file busy"); retry only that.
+    pub(crate) async fn spawn_fake_adapter(command: &str) -> AcpClient {
+        spawn_fake_adapter_with_env(command, &[]).await
+    }
+
+    async fn spawn_fake_adapter_with_env(
+        command: &str,
+        extra_env: &[(String, String)],
+    ) -> AcpClient {
+        for attempt in 0.. {
+            match AcpClient::spawn(command, &[], extra_env, false).await {
+                Ok(client) => return client,
+                Err(AcpError::Io(error))
+                    if error.kind() == std::io::ErrorKind::ExecutableFileBusy && attempt < 50 =>
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                Err(error) => panic!("spawn fake adapter: {error}"),
+            }
+        }
+        unreachable!("the retry loop returns or panics")
     }
 
     /// Spawn a probe script whose file name carries a runtime identity (e.g.
@@ -3360,14 +3383,9 @@ mod tests {
         permissions.set_mode(0o700);
         std::fs::set_permissions(&path, permissions).expect("chmod probe");
 
-        let mut client = AcpClient::spawn(
-            path.to_str().expect("probe path is UTF-8"),
-            &[],
-            extra_env,
-            false,
-        )
-        .await
-        .expect("spawn env probe script");
+        let mut client =
+            spawn_fake_adapter_with_env(path.to_str().expect("probe path is UTF-8"), extra_env)
+                .await;
         let observed = client
             .reader
             .next()
