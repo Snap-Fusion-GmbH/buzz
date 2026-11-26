@@ -1,8 +1,12 @@
 import { Check, Folders, Plus, Search } from "lucide-react";
 import * as React from "react";
 
+import { useUsersBatchQuery } from "@/features/profile/hooks";
 import type { Project } from "@/features/projects/hooks";
 import type { CreateProjectInput } from "@/features/projects/useCreateProject";
+import { useIdentityQuery } from "@/shared/api/hooks";
+import type { UserProfileSummary } from "@/shared/api/types";
+import { normalizePubkey, truncateNpub } from "@/shared/lib/pubkey";
 import { Button } from "@/shared/ui/button";
 import { ChooserDialogContent } from "@/shared/ui/chooser-dialog-content";
 import { Dialog } from "@/shared/ui/dialog";
@@ -13,6 +17,26 @@ import {
 import { CreateProjectFormContent } from "./CreateProjectFormContent";
 import { GitHubImportForm } from "./GitHubImportForm";
 import { GitHubMark } from "./GitHubMark";
+
+/**
+ * Who owns a project, so same-named projects from different people (or the
+ * same person's other identities) can be told apart: "You", or the owner's
+ * name, always with the short npub.
+ */
+export function projectOwnerLabel(
+  owner: string,
+  currentPubkey: string | null,
+  profiles: Record<string, UserProfileSummary> | undefined,
+): string {
+  const key = normalizePubkey(owner);
+  const npub = truncateNpub(key);
+  if (currentPubkey && key === normalizePubkey(currentPubkey)) {
+    return `You · ${npub}`;
+  }
+  const name =
+    profiles?.[key]?.displayName?.trim() || profiles?.[key]?.name?.trim();
+  return name ? `${name} · ${npub}` : npub;
+}
 
 function projectSearchText(project: Project) {
   return [
@@ -71,6 +95,16 @@ export function ProjectBrowserDialog({
       projectSearchText(project).includes(deferredQuery),
     );
   }, [deferredQuery, projects]);
+  const currentPubkey = useIdentityQuery().data?.pubkey ?? null;
+  const ownerPubkeys = React.useMemo(
+    () => [
+      ...new Set(projects.map((project) => normalizePubkey(project.owner))),
+    ],
+    [projects],
+  );
+  const ownerProfiles = useUsersBatchQuery(ownerPubkeys, {
+    enabled: open && ownerPubkeys.length > 0,
+  }).data?.profiles;
   const hasExactMatch = projects.some(
     (project) =>
       project.name.trim().toLocaleLowerCase() ===
@@ -178,6 +212,17 @@ export function ProjectBrowserDialog({
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-medium text-foreground">
                         {project.name}
+                      </span>
+                      <span
+                        className="block truncate text-xs font-normal text-muted-foreground"
+                        data-testid={`project-browser-owner-${project.dtag}`}
+                      >
+                        {projectOwnerLabel(
+                          project.owner,
+                          currentPubkey,
+                          ownerProfiles,
+                        )}
+                        {project.legacy ? " · repository only" : ""}
                       </span>
                       <span className="block truncate text-xs font-normal text-muted-foreground">
                         {project.description ||
