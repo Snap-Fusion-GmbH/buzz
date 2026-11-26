@@ -1,6 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { installMockBridge } from "../helpers/bridge";
+import { pinTheme } from "../helpers/theme";
 
 async function openGeneral(page: Page) {
   await page.goto("/");
@@ -685,6 +686,7 @@ test("right-clicking selected composer text hides the selection formatter", asyn
 test("Buzz theme uses the primary color for the selection formatter", async ({
   page,
 }) => {
+  await pinTheme(page, "buzz");
   await openGeneral(page);
 
   const input = page.getByTestId("message-input");

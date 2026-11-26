@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import { TEST_IDENTITIES, installMockBridge } from "../helpers/bridge";
+import { pinTheme } from "../helpers/theme";
 
 const MOCK_PUBKEY = "deadbeef".repeat(8);
 const ENGINEERING_CHANNEL_ID = "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9";
@@ -77,6 +78,8 @@ test.describe("channel muting", () => {
   });
 
   test("02 — muted channel is dimmed with BellOff icon", async ({ page }) => {
+    // Light-mode dimming; 02b covers dark mode.
+    await pinTheme(page, "buzz");
     await seedMuteState(page, ENGINEERING_CHANNEL_ID);
     await installMockBridge(page);
 

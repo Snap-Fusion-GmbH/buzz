@@ -4,6 +4,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { truncateNpub } from "../../src/shared/lib/pubkey";
 import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge } from "../helpers/bridge";
+import { pinTheme } from "../helpers/theme";
 
 declare global {
   interface Window {
@@ -151,6 +152,8 @@ test("confirms activation after create and preserves a safe disabled path", asyn
 test("inserts template variables with keyboard control and restores the caret", async ({
   page,
 }) => {
+  // The autocomplete snapshot is of the light Buzz theme.
+  await pinTheme(page, "buzz");
   const dialog = await openCreateWorkflow(page, "template_variables_keyboard");
   await dialog.getByRole("button", { name: "Add step", exact: true }).click();
   await page.getByRole("menuitem", { name: "Send Message" }).click();

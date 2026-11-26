@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge } from "../helpers/bridge";
+import { pinTheme } from "../helpers/theme";
 
 const SHOTS = "test-results/message-feedback";
 
@@ -95,6 +96,7 @@ test("pending continuation keeps Sending next to its timestamp", async ({
 });
 
 test("profile hover uses the channel hover surface", async ({ page }) => {
+  await pinTheme(page, "buzz");
   await installMockBridge(page);
   await page.goto("/");
 

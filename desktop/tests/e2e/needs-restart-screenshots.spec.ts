@@ -15,6 +15,7 @@ import { expect, test } from "@playwright/test";
 
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 import { waitForAnimations } from "../helpers/animations";
+import { pinTheme } from "../helpers/theme";
 
 const SHOTS = "test-results/restart-diff-screenshots";
 
@@ -276,6 +277,7 @@ test.describe("restart-diff screenshots", () => {
   });
 
   test("03-running-restart-action", async ({ page }) => {
+    await pinTheme(page, "buzz");
     await installMockBridge(page, {
       managedAgents: [RESTART_AGENT],
     });

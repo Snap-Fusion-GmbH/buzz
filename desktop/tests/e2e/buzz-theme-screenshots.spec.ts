@@ -1816,12 +1816,15 @@ test("accent picker reveals/hides when toggling Buzz", async ({ page }) => {
     "overflow-x",
     "auto",
   );
-  await expect(page.getByTestId("accent-color-blue")).toHaveAttribute(
+  // Indigo is the default accent.
+  await expect(page.getByTestId("accent-color-indigo")).toHaveAttribute(
     "aria-pressed",
     "true",
   );
   await expect(
-    page.getByTestId("accent-color-blue").getByTestId("accent-color-selection"),
+    page
+      .getByTestId("accent-color-indigo")
+      .getByTestId("accent-color-selection"),
   ).toBeVisible();
   await waitForAnimations(page);
   await page.getByTestId("settings-theme").screenshot({
