@@ -3,7 +3,7 @@ mod profile;
 
 use std::{
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Mutex, OnceLock,
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -27,6 +27,10 @@ pub(crate) struct ManagedWorkspaceState {
     pending: Mutex<Option<oneshot::Sender<()>>>,
     refresh: tokio::sync::Mutex<()>,
     store: OnceLock<SecretStore>,
+    /// Set once this process has confirmed the identity has a profile. A
+    /// silent re-enrollment (e.g. after a workspace reset) skips the
+    /// interactive login that otherwise creates it.
+    profile_ensured: AtomicBool,
 }
 
 impl ManagedWorkspaceState {
@@ -369,7 +373,32 @@ pub(crate) async fn managed_workspace_status(
         return Err("Buzz identity changed; sign in again".into());
     }
     result.signed_in = result.profile.is_some();
+    if let Some(profile) = &result.profile {
+        // At most one relay read per launch; a failure stays unset and is
+        // retried by the next status check instead of being dropped.
+        if let Err(error) = ensure_profile_once(
+            &state.profile_ensured,
+            profile::ensure_profile(&app_state, &keys, profile),
+        )
+        .await
+        {
+            eprintln!("buzz-desktop: managed profile not ensured yet: {error}");
+        }
+    }
     Ok(result)
+}
+
+/// Run `ensure` until it has succeeded once for this process.
+async fn ensure_profile_once(
+    done: &AtomicBool,
+    ensure: impl std::future::Future<Output = Result<(), String>>,
+) -> Result<(), String> {
+    if done.load(Ordering::Acquire) {
+        return Ok(());
+    }
+    ensure.await?;
+    done.store(true, Ordering::Release);
+    Ok(())
 }
 
 async fn enroll_session(
@@ -449,6 +478,7 @@ pub(crate) async fn managed_workspace_login(
     }
     let profile = enroll_session(&state, &config, &session, &keys, generation).await?;
     profile::ensure_profile(&app_state, &keys, &profile).await?;
+    state.profile_ensured.store(true, Ordering::Release);
     let _refresh = state.refresh.lock().await;
     state.check_generation(generation)?;
     if app_state.signing_keys()?.public_key() != keys.public_key() {

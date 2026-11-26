@@ -424,3 +424,36 @@ async fn existing_session_survives_outages_and_renews_without_interactive_login(
     assert!(service.verify(&state, &config, &mut session).await.is_err());
     assert_eq!(state.store(&config).load(SESSION_KEY).unwrap(), saved);
 }
+
+#[tokio::test]
+async fn a_missing_profile_is_ensured_once_per_launch_and_retried_after_a_failure() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    let done = AtomicBool::new(false);
+    let attempts = AtomicUsize::new(0);
+    let attempt = |ok: bool| {
+        let attempts = &attempts;
+        async move {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            if ok {
+                Ok(())
+            } else {
+                Err("relay unavailable".to_string())
+            }
+        }
+    };
+    // A failed publish stays pending for the next status check.
+    assert!(super::ensure_profile_once(&done, attempt(false))
+        .await
+        .is_err());
+    assert!(!done.load(Ordering::SeqCst));
+    assert!(super::ensure_profile_once(&done, attempt(true))
+        .await
+        .is_ok());
+    assert!(done.load(Ordering::SeqCst));
+    // Later checks in the same launch do not query the relay again.
+    assert!(super::ensure_profile_once(&done, attempt(true))
+        .await
+        .is_ok());
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+}
